@@ -1,0 +1,12 @@
+_book/
+.quarto/
+*.log
+*.aux
+*.toc
+*.out
+*.fls
+*.fdb_latexmk
+.DS_Store
+.ipynb_checkpoints/
+__pycache__/
+*.pyc

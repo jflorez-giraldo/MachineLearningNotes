@@ -1,0 +1,111 @@
+project:
+  type: book
+  output-dir: _book
+  execute-dir: project
+
+book:
+  title: "Hands-On Machine Learning Notes"
+  subtitle: "Study Notes and Teaching Materials Based on Hands-On Machine Learning with Scikit-Learn and PyTorch"
+  author: "Jonathan Florez"
+
+  description: >
+    Study notes, mathematical explanations, code walkthroughs,
+    teaching materials, and practical experiments based on
+    Hands-On Machine Learning with Scikit-Learn and PyTorch.
+
+  cover-image: cover.png
+  cover-image-alt: "Cover of Hands-On Machine Learning Notes"
+
+  page-navigation: true
+
+  search:
+    location: sidebar
+    type: textbox
+    limit: 20
+
+  sidebar:
+    style: docked
+    search: true
+    collapse-level: 1
+
+  chapters:
+    - index.qmd
+    - preface.qmd
+
+    - part: "Part I — The Fundamentals of Machine Learning"
+      chapters:
+        - chapters/chapter01.qmd
+        - chapters/chapter02.qmd
+        - chapters/chapter03.qmd
+
+    - part: "Additional Material"
+      chapters:
+        - appendix.qmd
+        - references.qmd
+
+  page-footer:
+    left: "Hands-On Machine Learning Notes"
+    right: "Jonathan Florez"
+    border: true
+
+bibliography: references.bib
+
+lang: en
+
+format:
+  html:
+    theme:
+      - cosmo
+      - styles/custom.scss
+
+    toc: true
+    toc-title: "Contents"
+    toc-depth: 3
+    number-sections: true
+    anchor-sections: true
+
+    code-copy: true
+    code-overflow: wrap
+    code-fold: false
+    code-tools:
+      source: true
+      toggle: true
+      caption: "Code"
+
+    code-line-numbers: false
+    highlight-style: github
+
+    callout-appearance: simple
+    callout-icon: true
+
+    fig-align: center
+    fig-cap-location: bottom
+    tbl-cap-location: top
+
+    smooth-scroll: true
+    link-external-newwindow: true
+
+  pdf:
+    documentclass: scrreprt
+    papersize: letter
+
+    toc: true
+    toc-depth: 3
+    number-sections: true
+
+    colorlinks: true
+    keep-tex: false
+
+    fig-align: center
+    fig-cap-location: bottom
+    tbl-cap-location: top
+
+execute:
+  freeze: auto
+  warning: false
+  message: false
+  echo: true
+  cache: false
+
+
+
