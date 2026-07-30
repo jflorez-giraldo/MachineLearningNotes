@@ -3,7 +3,7 @@ title: "Chapter – Classification"
 jupyter: python3
 
 execute:
-  enabled: false
+  enabled: true
 ---
 
 {{< chapter-actions >}}
