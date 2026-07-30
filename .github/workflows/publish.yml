@@ -2,7 +2,8 @@ name: Publish Quarto Book
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -13,13 +14,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-      - uses: quarto-dev/quarto-actions/setup@v2
+      - name: Set up Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
 
-      - name: Render HTML without executing notebooks
-        run: |
-          quarto render --to html --no-execute
+      - name: Render HTML using frozen results
+        run: quarto render --profile ci --to html
 
       - name: Publish to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
