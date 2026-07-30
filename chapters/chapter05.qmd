@@ -574,6 +574,7 @@ polynomial_svm.fit(X_moons, y_moons)
 #| fig-width: 7
 #| fig-height: 5
 #| code-fold: true
+#| code-summary: "Show code"
 
 fig, ax = plt.subplots(figsize=(7, 5))
 

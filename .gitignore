@@ -1,3 +1,4 @@
+geron/
 _book/
 .quarto/
 *.log
@@ -14,3 +15,18 @@ __pycache__/
 **/*.quarto_ipynb
 
 /.luarc.json
+
+# Jupyter and Quarto temporary files
+.jupyter_cache/
+**/.jupyter_cache/
+*.quarto_ipynb_*
+.ipynb_checkpoints/
+
+# Generated chapter assets
+*_files/
+
+# macOS duplicate copies
+* 2.qmd
+* 2.ipynb
+* 2.png
+* 2.quarto_ipynb_*
