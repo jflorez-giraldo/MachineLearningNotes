@@ -1,0 +1,1186 @@
+---
+title: "Chapter -- Decision Trees"
+jupyter: python3
+
+execute: 
+  enabled: true
+---
+
+## Introduction
+
+Decision Trees are supervised learning models that can perform classification, regression, and multioutput tasks. They are intuitive, flexible, and capable of learning nonlinear relationships and complex interactions between predictors.
+
+A Decision Tree partitions the feature space recursively. At each internal node, the algorithm asks a question of the form
+
+$$
+x_j \leq t,
+$$
+
+where $x_j$ is one predictor and $t$ is a threshold. Each answer sends the observation to the left or right branch until it reaches a terminal node, called a **leaf**. The prediction associated with that leaf is then returned.
+
+Decision Trees are also the basic building blocks of ensemble methods such as Random Forests, Extra Trees, Gradient Boosting, XGBoost, and LightGBM.
+
+::: {.callout-note}
+## Learning objectives
+
+After completing this chapter, you should be able to:
+
+- explain how a Decision Tree recursively partitions the feature space;
+- interpret the structure and output of a classification tree;
+- calculate and interpret Gini impurity and entropy;
+- explain the Classification and Regression Tree algorithm;
+- interpret class probabilities produced by a tree;
+- recognize why unrestricted trees tend to overfit;
+- regularize a tree using structural hyperparameters;
+- fit and interpret regression trees;
+- explain cost-complexity pruning;
+- distinguish Decision Trees from Extra Trees;
+- identify the main advantages and limitations of tree-based models.
+:::
+
+```{python}
+#| label: imports
+#| include: false
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+from sklearn.datasets import load_iris, make_moons
+from sklearn.inspection import DecisionBoundaryDisplay
+from sklearn.metrics import accuracy_score, mean_squared_error
+from sklearn.model_selection import train_test_split
+from sklearn.tree import (
+    DecisionTreeClassifier,
+    DecisionTreeRegressor,
+    ExtraTreeClassifier,
+    plot_tree
+)
+```
+
+## Training a classification tree
+
+We begin with the Iris dataset. To make the tree easy to visualize, we use only petal length and petal width.
+
+```{python}
+#| label: train-iris-tree
+
+iris = load_iris()
+
+X = iris.data[:, 2:]
+y = iris.target
+
+tree_clf = DecisionTreeClassifier(
+    max_depth=2,
+    random_state=42
+)
+
+tree_clf.fit(X, y)
+```
+
+Unlike many distance-based models, Decision Trees do not require feature scaling or centering. Their splits depend only on the ordering of predictor values and not on their units.
+
+::: {.callout-tip}
+## Minimal preprocessing
+
+Decision Trees generally do not require standardization. However, missing values, categorical variables, leakage, and inappropriate train-test splitting still require careful treatment.
+:::
+
+## Visualizing the tree with Python
+
+Scikit-Learn can draw the fitted tree directly with `plot_tree()`, so Graphviz is not required.
+
+```{python}
+#| label: fig-iris-tree
+#| fig-cap: "Decision Tree trained on petal length and petal width from the Iris dataset."
+#| fig-width: 11
+#| fig-height: 7
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig, ax = plt.subplots(figsize=(11, 7))
+
+plot_tree(
+    tree_clf,
+    feature_names=iris.feature_names[2:],
+    class_names=iris.target_names,
+    rounded=True,
+    filled=True,
+    impurity=True,
+    proportion=False,
+    ax=ax
+)
+
+plt.show()
+```
+
+Each node contains several pieces of information:
+
+- the splitting rule;
+- the impurity measure;
+- the number of training observations in the node;
+- the class counts;
+- the predicted class.
+
+The root node is at depth 0. Internal nodes contain splitting rules, while leaf nodes return final predictions.
+
+## How the tree makes predictions
+
+Suppose an Iris flower has a petal length smaller than the root threshold. The observation moves to the left branch. If that branch ends in a leaf dominated entirely by *Iris setosa*, the predicted class is *setosa*.
+
+If the petal length is larger than the root threshold, the observation moves to the right branch. A second question, perhaps involving petal width, then separates *versicolor* from *virginica*.
+
+This prediction process is deterministic. Every observation follows exactly one path from the root to a leaf.
+
+```{python}
+#| label: example-tree-predictions
+
+new_flowers = np.array([
+    [1.5, 0.3],
+    [5.0, 1.5],
+    [6.0, 2.2]
+])
+
+tree_clf.predict(new_flowers)
+```
+
+## Samples, values, and predicted classes
+
+The `samples` entry reports how many training observations reach the node.
+
+The `value` entry contains the class counts. For example,
+
+```text
+value = [0, 49, 5]
+```
+
+means that the node contains:
+
+- 0 observations from class 0;
+- 49 observations from class 1;
+- 5 observations from class 2.
+
+The predicted class is the class with the largest count.
+
+## Gini impurity
+
+Scikit-Learn uses Gini impurity by default for classification trees.
+
+For node $i$, the Gini impurity is
+
+$$
+G_i
+=
+1-\sum_{k=1}^{K}p_{i,k}^{\,2},
+$$
+
+where $p_{i,k}$ is the proportion of observations from class $k$ in node $i$.
+
+A node is pure when all observations belong to the same class. In that case, one class proportion is 1 and all others are 0, so
+
+$$
+G_i = 0.
+$$
+
+For a node with counts
+
+$$
+[0,49,5],
+$$
+
+the impurity is
+
+$$
+G_i
+=
+1
+-
+\left(\frac{0}{54}\right)^2
+-
+\left(\frac{49}{54}\right)^2
+-
+\left(\frac{5}{54}\right)^2
+\approx 0.168.
+$$
+
+```{python}
+#| label: gini-calculation
+
+counts = np.array([0, 49, 5])
+probabilities = counts / counts.sum()
+
+gini = 1 - np.sum(probabilities ** 2)
+gini
+```
+
+A lower impurity indicates that the node contains a more homogeneous set of classes.
+
+## Decision boundaries
+
+A Decision Tree creates axis-aligned partitions because every split involves one predictor at a time.
+
+```{python}
+#| label: fig-tree-boundaries
+#| fig-cap: "Decision boundaries generated by a depth-two Decision Tree."
+#| fig-width: 8
+#| fig-height: 6
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig, ax = plt.subplots(figsize=(8, 6))
+
+DecisionBoundaryDisplay.from_estimator(
+    tree_clf,
+    X,
+    response_method="predict",
+    plot_method="pcolormesh",
+    alpha=0.25,
+    ax=ax
+)
+
+for class_id, marker in zip(np.unique(y), ["o", "s", "^"]):
+    ax.scatter(
+        X[y == class_id, 0],
+        X[y == class_id, 1],
+        marker=marker,
+        label=iris.target_names[class_id]
+    )
+
+ax.set_xlabel("Petal length (cm)")
+ax.set_ylabel("Petal width (cm)")
+ax.legend()
+plt.show()
+```
+
+The first split divides the plane vertically because it uses petal length. A later split divides one region horizontally because it uses petal width.
+
+Increasing `max_depth` allows the tree to create more rectangular regions.
+
+```{python}
+#| label: fig-tree-depths
+#| fig-cap: "Increasing tree depth creates increasingly detailed partitions."
+#| fig-width: 12
+#| fig-height: 4
+#| code-fold: true
+#| code-summary: "Show code"
+
+depths = [1, 2, 4]
+
+fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+
+for depth, ax in zip(depths, axes):
+    model = DecisionTreeClassifier(
+        max_depth=depth,
+        random_state=42
+    )
+    model.fit(X, y)
+
+    DecisionBoundaryDisplay.from_estimator(
+        model,
+        X,
+        response_method="predict",
+        plot_method="pcolormesh",
+        alpha=0.25,
+        ax=ax
+    )
+
+    for class_id, marker in zip(np.unique(y), ["o", "s", "^"]):
+        ax.scatter(
+            X[y == class_id, 0],
+            X[y == class_id, 1],
+            marker=marker
+        )
+
+    ax.set_title(f"max_depth = {depth}")
+    ax.set_xlabel("Petal length")
+    ax.set_ylabel("Petal width")
+
+plt.tight_layout()
+plt.show()
+```
+
+## Estimating class probabilities
+
+A classification tree can estimate class probabilities. It first locates the leaf containing the new observation and then computes the relative frequency of every class in that leaf.
+
+For a flower with petal length 5 cm and petal width 1.5 cm:
+
+```{python}
+#| label: class-probabilities
+
+tree_clf.predict_proba([[5, 1.5]])
+```
+
+The corresponding class prediction is:
+
+```{python}
+#| label: class-prediction
+
+tree_clf.predict([[5, 1.5]])
+```
+
+The class with the largest estimated probability becomes the predicted class.
+
+::: {.callout-important}
+## Piecewise-constant probabilities
+
+All observations that fall in the same leaf receive exactly the same probability vector. Decision Tree probabilities may therefore be poorly calibrated, especially when leaves contain few observations.
+:::
+
+## The CART training algorithm
+
+Scikit-Learn uses the Classification and Regression Tree algorithm. CART grows binary trees: every split produces exactly two child nodes.
+
+At a given node, the algorithm searches over candidate features $j$ and thresholds $t_j$. For classification, it selects the split minimizing
+
+$$
+J(j,t_j)
+=
+\frac{m_{\text{left}}}{m}
+I_{\text{left}}
++
+\frac{m_{\text{right}}}{m}
+I_{\text{right}},
+$$
+
+where:
+
+- $m$ is the number of observations in the current node;
+- $m_{\text{left}}$ and $m_{\text{right}}$ are the child-node sizes;
+- $I_{\text{left}}$ and $I_{\text{right}}$ are their impurities.
+
+The algorithm repeats this process recursively until a stopping condition is reached.
+
+Typical stopping conditions include:
+
+- the maximum depth has been reached;
+- the node contains too few observations to split;
+- no candidate split provides sufficient improvement;
+- a structural restriction prevents further growth.
+
+CART uses a greedy strategy. It chooses the best split available at the current node without considering whether another split might produce a globally better tree later.
+
+::: {.callout-note}
+## Greedy optimization
+
+The fitted tree is not guaranteed to be the globally optimal tree. Finding the smallest optimal tree is computationally difficult, so practical algorithms rely on greedy recursive partitioning.
+:::
+
+## Gini impurity versus entropy
+
+Entropy is another common classification criterion:
+
+$$
+H_i
+=
+-
+\sum_{k=1}^{K}
+p_{i,k}\log_2(p_{i,k}),
+$$
+
+where terms with $p_{i,k}=0$ are omitted.
+
+Entropy is zero for a pure node. It increases as the class distribution becomes more mixed.
+
+```{python}
+#| label: impurity-functions
+#| fig-cap: "Gini impurity and entropy for a binary classification node."
+#| fig-width: 8
+#| fig-height: 5
+#| code-fold: true
+#| code-summary: "Show code"
+
+p = np.linspace(0.001, 0.999, 500)
+
+gini_curve = 1 - p**2 - (1 - p)**2
+entropy_curve = -p * np.log2(p) - (1 - p) * np.log2(1 - p)
+
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.plot(p, gini_curve, label="Gini impurity")
+ax.plot(p, entropy_curve, label="Entropy")
+ax.set_xlabel("Proportion of class 1")
+ax.set_ylabel("Impurity")
+ax.legend()
+plt.show()
+```
+
+In practice, Gini impurity and entropy often produce similar trees. Gini is somewhat faster to compute and is a reasonable default. Entropy sometimes creates slightly more balanced splits, but the difference is usually modest compared with the effects of regularization and validation.
+
+```{python}
+#| label: compare-criteria
+
+gini_tree = DecisionTreeClassifier(
+    criterion="gini",
+    max_depth=3,
+    random_state=42
+)
+
+entropy_tree = DecisionTreeClassifier(
+    criterion="entropy",
+    max_depth=3,
+    random_state=42
+)
+
+gini_tree.fit(X, y)
+entropy_tree.fit(X, y)
+
+gini_tree.get_n_leaves(), entropy_tree.get_n_leaves()
+```
+
+## Why Decision Trees overfit
+
+An unrestricted Decision Tree can continue partitioning until leaves are nearly pure. This frequently produces:
+
+- very high training accuracy;
+- low bias;
+- high variance;
+- unstable decision boundaries;
+- poor performance on unseen data.
+
+The following example uses a noisy moons dataset.
+
+```{python}
+#| label: make-moons-data
+
+X_moons, y_moons = make_moons(
+    n_samples=500,
+    noise=0.30,
+    random_state=42
+)
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X_moons,
+    y_moons,
+    test_size=0.30,
+    stratify=y_moons,
+    random_state=42
+)
+```
+
+```{python}
+#| label: fig-unregularized-tree
+#| fig-cap: "An unrestricted tree creates an irregular boundary on noisy data."
+#| fig-width: 8
+#| fig-height: 6
+#| code-fold: true
+#| code-summary: "Show code"
+
+unregularized_tree = DecisionTreeClassifier(
+    random_state=42
+)
+
+unregularized_tree.fit(X_train, y_train)
+
+fig, ax = plt.subplots(figsize=(8, 6))
+
+DecisionBoundaryDisplay.from_estimator(
+    unregularized_tree,
+    X_train,
+    response_method="predict",
+    plot_method="pcolormesh",
+    alpha=0.25,
+    ax=ax
+)
+
+ax.scatter(
+    X_train[y_train == 0, 0],
+    X_train[y_train == 0, 1],
+    marker="o",
+    label="Class 0"
+)
+
+ax.scatter(
+    X_train[y_train == 1, 0],
+    X_train[y_train == 1, 1],
+    marker="s",
+    label="Class 1"
+)
+
+ax.set_xlabel("$x_1$")
+ax.set_ylabel("$x_2$")
+ax.legend()
+plt.show()
+```
+
+```{python}
+#| label: unregularized-scores
+
+train_accuracy = accuracy_score(
+    y_train,
+    unregularized_tree.predict(X_train)
+)
+
+test_accuracy = accuracy_score(
+    y_test,
+    unregularized_tree.predict(X_test)
+)
+
+train_accuracy, test_accuracy
+```
+
+A large difference between training and test performance is evidence of overfitting.
+
+## Regularization hyperparameters
+
+Decision Trees are nonparametric models: their complexity is not fixed before training. Regularization restricts the tree-growing process.
+
+| Hyperparameter | What it controls | Effect of stronger restriction |
+|---|---|---|
+| `max_depth` | Maximum number of tree levels | Produces a shallower tree |
+| `min_samples_split` | Minimum observations required to split a node | Prevents splitting small nodes |
+| `min_samples_leaf` | Minimum observations required in every leaf | Produces larger, more stable leaves |
+| `min_weight_fraction_leaf` | Minimum weighted fraction required in a leaf | Useful with observation weights |
+| `max_leaf_nodes` | Maximum number of terminal nodes | Directly limits tree size |
+| `max_features` | Number of predictors considered for a split | Adds randomness and can reduce variance |
+| `min_impurity_decrease` | Minimum required impurity reduction | Rejects weak splits |
+| `ccp_alpha` | Cost-complexity pruning strength | Removes branches after growth |
+
+A regularized model might be:
+
+```{python}
+#| label: regularized-tree
+
+regularized_tree = DecisionTreeClassifier(
+    max_depth=5,
+    min_samples_leaf=10,
+    random_state=42
+)
+
+regularized_tree.fit(X_train, y_train)
+```
+
+```{python}
+#| label: fig-regularized-tree
+#| fig-cap: "Regularization produces a smoother and more stable decision boundary."
+#| fig-width: 8
+#| fig-height: 6
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig, ax = plt.subplots(figsize=(8, 6))
+
+DecisionBoundaryDisplay.from_estimator(
+    regularized_tree,
+    X_train,
+    response_method="predict",
+    plot_method="pcolormesh",
+    alpha=0.25,
+    ax=ax
+)
+
+ax.scatter(
+    X_train[y_train == 0, 0],
+    X_train[y_train == 0, 1],
+    marker="o"
+)
+
+ax.scatter(
+    X_train[y_train == 1, 0],
+    X_train[y_train == 1, 1],
+    marker="s"
+)
+
+ax.set_xlabel("$x_1$")
+ax.set_ylabel("$x_2$")
+plt.show()
+```
+
+```{python}
+#| label: regularized-scores
+
+regularized_train_accuracy = accuracy_score(
+    y_train,
+    regularized_tree.predict(X_train)
+)
+
+regularized_test_accuracy = accuracy_score(
+    y_test,
+    regularized_tree.predict(X_test)
+)
+
+regularized_train_accuracy, regularized_test_accuracy
+```
+
+Regularization may reduce training accuracy while improving generalization.
+
+## Pre-pruning and post-pruning
+
+Tree complexity can be controlled in two conceptually different ways.
+
+### Pre-pruning
+
+Pre-pruning stops the tree while it is being grown. Hyperparameters such as `max_depth`, `min_samples_leaf`, and `min_impurity_decrease` are pre-pruning controls.
+
+### Post-pruning
+
+Post-pruning first grows a larger tree and then removes weak branches.
+
+Scikit-Learn implements **minimal cost-complexity pruning** through `ccp_alpha`. The objective balances impurity and the number of terminal nodes:
+
+$$
+R_{\alpha}(T)
+=
+R(T)+\alpha|\widetilde{T}|,
+$$
+
+where:
+
+- $R(T)$ is the total leaf impurity;
+- $|\widetilde{T}|$ is the number of leaves;
+- $\alpha$ controls the penalty on tree size.
+
+Larger values of `ccp_alpha` produce smaller trees.
+
+```{python}
+#| label: pruning-path
+
+full_tree = DecisionTreeClassifier(
+    random_state=42
+)
+
+path = full_tree.cost_complexity_pruning_path(
+    X_train,
+    y_train
+)
+
+ccp_alphas = path.ccp_alphas
+impurities = path.impurities
+```
+
+```{python}
+#| label: fig-pruning-path
+#| fig-cap: "Cost-complexity pruning path for the training data."
+#| fig-width: 8
+#| fig-height: 5
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.plot(ccp_alphas[:-1], impurities[:-1], marker="o")
+ax.set_xlabel("Effective alpha")
+ax.set_ylabel("Total leaf impurity")
+plt.show()
+```
+
+```{python}
+#| label: pruning-models
+
+pruned_trees = []
+
+for alpha in ccp_alphas:
+    model = DecisionTreeClassifier(
+        random_state=42,
+        ccp_alpha=alpha
+    )
+    model.fit(X_train, y_train)
+    pruned_trees.append(model)
+
+node_counts = [model.tree_.node_count for model in pruned_trees]
+tree_depths = [model.tree_.max_depth for model in pruned_trees]
+```
+
+```{python}
+#| label: fig-pruning-complexity
+#| fig-cap: "Tree size decreases as the pruning penalty increases."
+#| fig-width: 8
+#| fig-height: 5
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.plot(ccp_alphas, node_counts, marker="o", label="Number of nodes")
+ax.plot(ccp_alphas, tree_depths, marker="s", label="Tree depth")
+ax.set_xlabel("ccp_alpha")
+ax.legend()
+plt.show()
+```
+
+The pruning parameter should be selected using validation or cross-validation, not the test set.
+
+## Feature importance
+
+A fitted Decision Tree exposes impurity-based feature importances through `feature_importances_`.
+
+```{python}
+#| label: iris-feature-importance
+
+importance_tree = DecisionTreeClassifier(
+    max_depth=4,
+    random_state=42
+)
+
+importance_tree.fit(iris.data, iris.target)
+
+dict(
+    zip(
+        iris.feature_names,
+        importance_tree.feature_importances_
+    )
+)
+```
+
+An impurity-based importance measures the accumulated weighted reduction in impurity produced by splits using each predictor.
+
+::: {.callout-warning}
+## Limitations of impurity-based importance
+
+Impurity-based importance can favor continuous variables or predictors with many possible split points. It also does not indicate the direction of an effect. Permutation importance is often preferable when interpretation matters.
+:::
+
+## Regression trees
+
+Decision Trees can also predict continuous outcomes. At each leaf, a regression tree usually predicts the mean target value of the training observations in that leaf.
+
+We generate a noisy quadratic dataset:
+
+```{python}
+#| label: regression-data
+
+rng = np.random.default_rng(42)
+
+X_reg = 2 * rng.random((200, 1)) - 1
+
+y_reg = (
+    0.5 * X_reg[:, 0] ** 2
+    + 0.1 * X_reg[:, 0]
+    + rng.normal(0, 0.05, 200)
+)
+```
+
+```{python}
+#| label: regression-trees
+
+tree_reg_depth_2 = DecisionTreeRegressor(
+    max_depth=2,
+    random_state=42
+)
+
+tree_reg_depth_3 = DecisionTreeRegressor(
+    max_depth=3,
+    random_state=42
+)
+
+tree_reg_depth_2.fit(X_reg, y_reg)
+tree_reg_depth_3.fit(X_reg, y_reg)
+```
+
+```{python}
+#| label: fig-regression-trees
+#| fig-cap: "Regression trees produce piecewise-constant predictions."
+#| fig-width: 11
+#| fig-height: 4
+#| code-fold: true
+#| code-summary: "Show code"
+
+x_plot = np.linspace(-1, 1, 500).reshape(-1, 1)
+
+fig, axes = plt.subplots(1, 2, figsize=(9.5, 4))
+
+for model, depth, ax in zip(
+    [tree_reg_depth_2, tree_reg_depth_3],
+    [2, 3],
+    axes
+):
+    predictions = model.predict(x_plot)
+
+    ax.scatter(X_reg[:, 0], y_reg, alpha=0.7)
+    ax.plot(x_plot[:, 0], predictions)
+    ax.set_title(f"max_depth = {depth}")
+    ax.set_xlabel("$x_1$")
+    ax.set_ylabel("$y$")
+
+plt.tight_layout()
+plt.show()
+```
+
+A regression tree partitions the predictor space into regions and returns a constant prediction within each region. Increasing the tree depth creates more and narrower intervals.
+
+## Regression splitting criterion
+
+For regression, CART selects the feature and threshold minimizing the weighted child-node error. With squared error, the split objective can be written as
+
+$$
+J(j,t_j)
+=
+\frac{m_{\text{left}}}{m}
+\operatorname{MSE}_{\text{left}}
++
+\frac{m_{\text{right}}}{m}
+\operatorname{MSE}_{\text{right}}.
+$$
+
+For a leaf containing observations indexed by $\mathcal{L}$, the prediction is
+
+$$
+\widehat{y}_{\mathcal{L}}
+=
+\frac{1}{|\mathcal{L}|}
+\sum_{i\in\mathcal{L}}y_i.
+$$
+
+The within-leaf mean squared error is
+
+$$
+\operatorname{MSE}_{\mathcal{L}}
+=
+\frac{1}{|\mathcal{L}|}
+\sum_{i\in\mathcal{L}}
+\left(
+y_i-\widehat{y}_{\mathcal{L}}
+\right)^2.
+$$
+
+## Overfitting in regression trees
+
+```{python}
+#| label: fig-regression-overfitting
+#| fig-cap: "An unrestricted regression tree follows noise in the training data."
+#| fig-width: 11
+#| fig-height: 4
+#| code-fold: true
+#| code-summary: "Show code"
+
+unrestricted_reg = DecisionTreeRegressor(
+    random_state=42
+)
+
+regularized_reg = DecisionTreeRegressor(
+    min_samples_leaf=10,
+    random_state=42
+)
+
+unrestricted_reg.fit(X_reg, y_reg)
+regularized_reg.fit(X_reg, y_reg)
+
+fig, axes = plt.subplots(1, 2, figsize=(9.5, 4))
+
+for model, title, ax in zip(
+    [unrestricted_reg, regularized_reg],
+    ["Unrestricted tree", "min_samples_leaf = 10"],
+    axes
+):
+    predictions = model.predict(x_plot)
+
+    ax.scatter(X_reg[:, 0], y_reg, alpha=0.7)
+    ax.plot(x_plot[:, 0], predictions)
+    ax.set_title(title)
+    ax.set_xlabel("$x_1$")
+    ax.set_ylabel("$y$")
+
+plt.tight_layout()
+plt.show()
+```
+
+The unrestricted model creates many abrupt steps to match individual observations. Requiring larger leaves produces a smoother estimate.
+
+## Instability of Decision Trees
+
+Decision Trees are high-variance estimators. Small changes in the training data may produce a different root split and a substantially different structure.
+
+```{python}
+#| label: fig-tree-instability
+#| fig-cap: "Two trees trained after a small change in the data may produce different partitions."
+#| fig-width: 11
+#| fig-height: 4
+#| code-fold: true
+#| code-summary: "Show code"
+
+rng = np.random.default_rng(42)
+
+indices_a = rng.choice(
+    len(X_moons),
+    size=len(X_moons),
+    replace=True
+)
+
+indices_b = rng.choice(
+    len(X_moons),
+    size=len(X_moons),
+    replace=True
+)
+
+tree_a = DecisionTreeClassifier(
+    max_depth=5,
+    random_state=1
+)
+
+tree_b = DecisionTreeClassifier(
+    max_depth=5,
+    random_state=2
+)
+
+tree_a.fit(
+    X_moons[indices_a],
+    y_moons[indices_a]
+)
+
+tree_b.fit(
+    X_moons[indices_b],
+    y_moons[indices_b]
+)
+
+fig, axes = plt.subplots(1, 2, figsize=(9.5, 4))
+
+for model, title, ax in zip(
+    [tree_a, tree_b],
+    ["Bootstrap sample A", "Bootstrap sample B"],
+    axes
+):
+    DecisionBoundaryDisplay.from_estimator(
+        model,
+        X_moons,
+        response_method="predict",
+        plot_method="pcolormesh",
+        alpha=0.25,
+        ax=ax
+    )
+
+    ax.scatter(
+        X_moons[y_moons == 0, 0],
+        X_moons[y_moons == 0, 1],
+        marker="o"
+    )
+
+    ax.scatter(
+        X_moons[y_moons == 1, 0],
+        X_moons[y_moons == 1, 1],
+        marker="s"
+    )
+
+    ax.set_title(title)
+    ax.set_xlabel("$x_1$")
+    ax.set_ylabel("$x_2$")
+
+plt.tight_layout()
+plt.show()
+```
+
+This instability motivates ensemble methods, which aggregate many different trees to reduce variance.
+
+## Decision Trees versus Extra Trees
+
+An ordinary CART tree searches for the best threshold among candidate predictors at each node.
+
+An Extra Tree introduces more randomness. It selects random thresholds for candidate predictors and then chooses the best among those randomized candidates.
+
+```{python}
+#| label: tree-versus-extra-tree
+
+decision_tree = DecisionTreeClassifier(
+    max_depth=5,
+    random_state=42
+)
+
+extra_tree = ExtraTreeClassifier(
+    max_depth=5,
+    random_state=42
+)
+
+decision_tree.fit(X_train, y_train)
+extra_tree.fit(X_train, y_train)
+```
+
+```{python}
+#| label: fig-tree-extra-tree
+#| fig-cap: "Decision boundary from a standard Decision Tree and a randomized Extra Tree."
+#| fig-width: 11
+#| fig-height: 4
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig, axes = plt.subplots(1, 2, figsize=(9.5, 4))
+
+for model, title, ax in zip(
+    [decision_tree, extra_tree],
+    ["Decision Tree", "Extra Tree"],
+    axes
+):
+    DecisionBoundaryDisplay.from_estimator(
+        model,
+        X_train,
+        response_method="predict",
+        plot_method="pcolormesh",
+        alpha=0.25,
+        ax=ax
+    )
+
+    ax.scatter(
+        X_train[y_train == 0, 0],
+        X_train[y_train == 0, 1],
+        marker="o"
+    )
+
+    ax.scatter(
+        X_train[y_train == 1, 0],
+        X_train[y_train == 1, 1],
+        marker="s"
+    )
+
+    ax.set_title(title)
+    ax.set_xlabel("$x_1$")
+    ax.set_ylabel("$x_2$")
+
+plt.tight_layout()
+plt.show()
+```
+
+| Characteristic | Decision Tree | Extra Tree |
+|---|---|---|
+| Threshold selection | Searches candidate thresholds | Uses randomized thresholds |
+| Randomness | Lower | Higher |
+| Individual-tree bias | Often lower | Often higher |
+| Individual-tree variance | Often higher | Often lower |
+| Main use | Standalone interpretation or ensembles | Usually ensembles |
+| Ensemble counterpart | Random Forest | Extra Trees ensemble |
+
+A single Extra Tree is not automatically better than a Decision Tree. Its main value appears when many randomized trees are aggregated.
+
+::: {.callout-note}
+## Extra Tree versus Extra Trees
+
+`ExtraTreeClassifier` fits one randomized tree. `ExtraTreesClassifier` fits an ensemble of randomized trees. The variance-reduction advantage is primarily an ensemble effect.
+:::
+
+## Computational complexity
+
+Training a balanced Decision Tree commonly requires approximately
+
+$$
+O(mn\log m),
+$$
+
+where:
+
+- $m$ is the number of training observations;
+- $n$ is the number of predictors.
+
+Prediction is fast because an observation follows only one path from root to leaf. For a balanced tree, prediction is approximately
+
+$$
+O(\log m).
+$$
+
+However, an unbalanced tree may be much deeper and can have slower prediction.
+
+## Advantages of Decision Trees
+
+Decision Trees have several important strengths:
+
+- they are easy to visualize and explain;
+- they naturally model nonlinear relationships;
+- they capture interactions without explicit interaction terms;
+- they require little numerical preprocessing;
+- they work for classification and regression;
+- they can handle multiclass problems directly;
+- predictions are fast;
+- they provide an interpretable sequence of decision rules.
+
+## Limitations of Decision Trees
+
+Their main limitations include:
+
+- high variance and instability;
+- strong tendency to overfit;
+- axis-aligned and piecewise-constant predictions;
+- poor extrapolation in regression;
+- possible bias in impurity-based feature importance;
+- limited probability calibration;
+- greedy optimization;
+- often lower predictive performance than tree ensembles.
+
+::: {.callout-warning}
+## No reliable extrapolation
+
+A regression tree predicts leaf averages. Outside the observed predictor range, it continues returning an existing leaf value rather than extending a trend.
+:::
+
+## Practical modeling workflow
+
+A reliable workflow for Decision Trees is:
+
+1. create separate training and test sets;
+2. define a simple baseline tree;
+3. tune structural parameters with cross-validation;
+4. compare pre-pruning and cost-complexity pruning;
+5. evaluate training and validation performance together;
+6. inspect tree depth, leaf sizes, and class distributions;
+7. assess probability calibration when probabilities matter;
+8. reserve the test set for final evaluation;
+9. compare the single tree with ensemble alternatives.
+
+Example model:
+
+```{python}
+#| label: practical-tree
+
+final_tree = DecisionTreeClassifier(
+    criterion="gini",
+    max_depth=6,
+    min_samples_split=10,
+    min_samples_leaf=5,
+    random_state=42
+)
+```
+
+## Common mistakes
+
+::: {.callout-warning}
+## Leaving the tree unrestricted
+
+A fully grown tree often memorizes the training sample. Always evaluate regularization or pruning.
+:::
+
+::: {.callout-warning}
+## Selecting complexity from training accuracy
+
+Training accuracy generally improves as the tree grows. Complexity must be selected using validation or cross-validation.
+:::
+
+::: {.callout-warning}
+## Treating feature importance as causality
+
+A high impurity-based importance does not imply that a predictor causes the outcome.
+:::
+
+::: {.callout-warning}
+## Assuming stable interpretation
+
+A visually simple tree may change substantially after a small change in the training sample.
+:::
+
+::: {.callout-warning}
+## Ignoring class imbalance
+
+A tree trained on imbalanced classes may favor the majority class. Consider suitable metrics, `class_weight`, resampling, and leaf-level class counts.
+:::
+
+## Chapter summary
+
+Decision Trees recursively partition the feature space using simple threshold rules. Classification trees predict classes and class proportions, while regression trees predict leaf averages.
+
+CART grows binary trees greedily by selecting splits that minimize weighted impurity or prediction error. Gini impurity and entropy are common classification criteria, while squared error is frequently used for regression.
+
+Unrestricted trees have low bias but high variance and often overfit. Their complexity can be controlled using depth limits, minimum node sizes, leaf-size restrictions, impurity thresholds, maximum leaf counts, and cost-complexity pruning.
+
+Decision Trees are interpretable and require little preprocessing, but they are unstable and often less accurate than ensemble methods. Random Forests and Extra Trees reduce this instability by combining many diverse trees.
+
+## Exercises
+
+1. Fit Decision Trees with `max_depth` ranging from 1 to 10 on the moons dataset. Plot training and validation accuracy against depth.
+
+2. Compare Gini impurity and entropy on the Iris dataset. Examine whether the resulting structures and predictions differ.
+
+3. Fit a tree with several values of `min_samples_leaf`. Explain how this parameter changes the decision boundary.
+
+4. Use `cost_complexity_pruning_path()` and cross-validation to select `ccp_alpha`.
+
+5. Compare impurity-based feature importance with permutation importance.
+
+6. Generate a nonlinear regression dataset and compare an unrestricted tree with trees regularized by `max_depth` and `min_samples_leaf`.
+
+7. Demonstrate tree instability by repeatedly fitting models to bootstrap samples.
+
+8. Compare `DecisionTreeClassifier`, `ExtraTreeClassifier`, and an ensemble of Extra Trees on the same dataset.
+
+9. Explain why a regression tree cannot reliably extrapolate beyond the training range.
+
+10. Investigate how `class_weight="balanced"` affects a Decision Tree on an imbalanced classification problem.

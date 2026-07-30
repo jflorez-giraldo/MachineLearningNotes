@@ -1,0 +1,127 @@
+/*-- scss:defaults --*/
+
+
+/*-- scss:rules --*/
+
+/* =========================================================
+   Chapter resource buttons
+   ========================================================= */
+
+.chapter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+
+  margin-top: 1rem;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+
+  border-bottom: 1px solid
+    rgba(var(--bs-body-color-rgb), 0.15);
+}
+
+
+/* Base button */
+
+.chapter-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+
+  min-height: 2.5rem;
+  padding: 0.55rem 1rem;
+
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+
+  text-decoration: none !important;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.2;
+
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+
+/* Notebook button */
+
+.chapter-action-notebook {
+  color: var(--bs-primary) !important;
+  background-color: transparent;
+  border-color: var(--bs-primary);
+}
+
+.chapter-action-notebook:hover {
+  color: #ffffff !important;
+  background-color: var(--bs-primary);
+  border-color: var(--bs-primary);
+
+  transform: translateY(-1px);
+  box-shadow: 0 0.25rem 0.75rem
+    rgba(var(--bs-primary-rgb), 0.2);
+}
+
+
+/* PDF button */
+
+.chapter-action-pdf {
+  color: var(--bs-body-color) !important;
+  background-color: var(--bs-tertiary-bg);
+  border-color: var(--bs-border-color);
+}
+
+.chapter-action-pdf:hover {
+  color: var(--bs-body-color) !important;
+  background-color: var(--bs-secondary-bg);
+  border-color: var(--bs-secondary-color);
+
+  transform: translateY(-1px);
+  box-shadow: 0 0.25rem 0.75rem
+    rgba(0, 0, 0, 0.08);
+}
+
+
+/* Icons */
+
+.chapter-action i {
+  font-size: 1rem;
+}
+
+
+/* Keyboard accessibility */
+
+.chapter-action:focus-visible {
+  outline: 3px solid
+    rgba(var(--bs-primary-rgb), 0.35);
+  outline-offset: 2px;
+}
+
+
+/* Small screens */
+
+@media (max-width: 576px) {
+
+  .chapter-actions {
+    align-items: stretch;
+  }
+
+  .chapter-action {
+    width: 100%;
+  }
+}
+
+
+/* Printing */
+
+@media print {
+
+  .chapter-actions {
+    display: none !important;
+  }
+}

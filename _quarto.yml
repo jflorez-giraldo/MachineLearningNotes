@@ -3,10 +3,16 @@ project:
   output-dir: _book
   execute-dir: project
 
+  resources: 
+    - notebooks/**
+
 book:
   title: "Hands-On Machine Learning Notes"
   subtitle: "Study Notes and Teaching Materials Based on Hands-On Machine Learning with Scikit-Learn and PyTorch"
   author: "Jonathan Florez"
+  output-file: machine-learning-I
+  downloads:
+    - pdf
 
   description: >
     Study notes, mathematical explanations, code walkthroughs,
@@ -37,6 +43,14 @@ book:
         - chapters/chapter01.qmd
         - chapters/chapter02.qmd
         - chapters/chapter03.qmd
+        #- chapters/chapter03_classification.qmd
+        - chapters/chapter04.qmd
+        - chapters/chapter05.qmd
+        - chapters/chapter06.qmd
+
+    - part: "Part II — Neural Networks and Deep Learning"
+      chapters: 
+        - chapters/chapter09.qmd
 
     - part: "Additional Material"
       chapters:
@@ -56,17 +70,21 @@ format:
   html:
     theme:
       - cosmo
+      - styles/colors.scss
+      #- styles/admonitions.scss
+      - styles/buttons.scss
       - styles/custom.scss
-
     toc: true
     toc-title: "Contents"
     toc-depth: 3
     number-sections: true
     anchor-sections: true
+    number-depth: 3
 
     code-copy: true
     code-overflow: wrap
-    code-fold: false
+    #code-fold: true
+    #code-summary: "Show code"
     code-tools:
       source: true
       toggle: true
@@ -92,6 +110,7 @@ format:
     toc: true
     toc-depth: 3
     number-sections: true
+    number-depth: 3
 
     colorlinks: true
     keep-tex: false
@@ -105,7 +124,7 @@ execute:
   warning: false
   message: false
   echo: true
-  cache: false
+  cache: true
 
 
 

@@ -1,0 +1,1352 @@
+---
+title: "Classification"
+jupyter: python3
+execute:
+  echo: true
+  warning: false
+  message: false
+  cache: true
+---
+
+# Introduction
+
+Classification models assign observations to discrete categories. Examples include detecting fraudulent transactions, identifying diseases from medical images, filtering spam, and recognizing handwritten digits.
+
+This chapter develops the main ideas of classification using the MNIST dataset. The analysis begins with a binary problem—detecting whether an image represents the digit 5—and then extends the workflow to multiclass classification.
+
+::: {.callout-note title="Learning objectives"}
+By the end of this chapter, you should be able to:
+
+- formulate binary and multiclass classification problems;
+- train classifiers with Scikit-Learn;
+- evaluate models using cross-validation;
+- interpret confusion matrices;
+- compute precision, recall, specificity, and the F1-score;
+- explain the role of the decision threshold;
+- compare precision–recall and ROC curves;
+- analyze errors in a multiclass classifier;
+- select evaluation metrics according to the practical objective of the model.
+:::
+
+# The MNIST dataset
+
+## Loading the data
+
+The **Modified National Institute of Standards and Technology (MNIST)** dataset contains 70,000 grayscale images of handwritten digits. Each image has a resolution of \(28 \times 28\) pixels and belongs to one of ten classes, from 0 to 9.
+
+Scikit-Learn provides access to MNIST through OpenML.
+
+```{python}
+#| label: load-mnist
+
+from sklearn.datasets import fetch_openml
+
+mnist = fetch_openml(
+    "mnist_784",
+    as_frame=False,
+    parser="auto"
+)
+```
+
+The returned object is a Scikit-Learn `Bunch`, which behaves similarly to a dictionary.
+
+```{python}
+#| label: inspect-mnist
+
+mnist.keys()
+```
+
+The two components needed for modeling are:
+
+- `data`: the matrix of predictor variables;
+- `target`: the corresponding class labels.
+
+```{python}
+#| label: extract-features-target
+
+X, y = mnist.data, mnist.target
+
+print("Feature matrix:", X.shape)
+print("Target vector:", y.shape)
+```
+
+There are 70,000 observations and 784 predictor variables. The number 784 results from flattening each \(28 \times 28\) image into a one-dimensional vector:
+
+\[
+28 \times 28 = 784.
+\]
+
+## Visualizing an observation
+
+Before training a model, it is useful to reconstruct and display one of the images.
+
+```{python}
+#| label: fig-first-mnist-digit
+#| fig-cap: "First handwritten digit in the MNIST dataset."
+#| fig-align: center
+
+import matplotlib.pyplot as plt
+
+some_digit = X[0]
+some_digit_image = some_digit.reshape(28, 28)
+
+plt.figure(figsize=(3, 3))
+plt.imshow(some_digit_image, cmap="binary")
+plt.axis("off")
+plt.show()
+```
+
+The corresponding class label is:
+
+```{python}
+y[0]
+```
+
+OpenML returns the labels as strings. Since the classes are integers from 0 to 9, they can be stored efficiently as unsigned 8-bit integers.
+
+```{python}
+#| label: convert-target
+
+import numpy as np
+
+y = y.astype(np.uint8)
+
+print("Target type:", y.dtype)
+print("First labels:", y[:10])
+```
+
+## Training and test sets
+
+MNIST includes a conventional split: the first 60,000 observations are used for training and the final 10,000 for testing.
+
+```{python}
+#| label: split-mnist
+
+X_train, X_test = X[:60_000], X[60_000:]
+y_train, y_test = y[:60_000], y[60_000:]
+
+print("Training set:", X_train.shape)
+print("Test set:", X_test.shape)
+```
+
+The test set should remain untouched during model development. It is reserved for the final evaluation after the modeling decisions have been made.
+
+# Binary classification
+
+## Defining the target class
+
+To introduce classification metrics, the ten-class problem is simplified into a binary task:
+
+> Is the image a 5 or not?
+
+The positive class contains images of the digit 5. All remaining digits belong to the negative class.
+
+```{python}
+#| label: binary-target
+
+y_train_5 = y_train == 5
+y_test_5 = y_test == 5
+
+print("Number of 5s in training:", y_train_5.sum())
+print("Proportion of 5s:", y_train_5.mean())
+```
+
+## Training an SGD classifier
+
+The `SGDClassifier` trains a linear classifier using stochastic gradient descent. It is computationally efficient and works well with large datasets.
+
+```{python}
+#| label: train-sgd-binary
+
+from sklearn.linear_model import SGDClassifier
+
+sgd_clf = SGDClassifier(random_state=42)
+sgd_clf.fit(X_train, y_train_5)
+```
+
+A first prediction can be generated for the digit displayed in @fig-first-mnist-digit.
+
+```{python}
+#| label: first-binary-prediction
+
+prediction = sgd_clf.predict([some_digit])
+
+print("Predicted as 5:", prediction[0])
+print("Actually a 5:", y[0] == 5)
+```
+
+A single correct prediction does not establish that the classifier performs well. Model evaluation must be based on observations that were not used to fit the model.
+
+# Evaluating classification models
+
+## Cross-validation
+
+In \(k\)-fold cross-validation, the training set is partitioned into \(k\) folds. During each iteration, one fold is used for validation and the remaining folds are used for training. Every observation is therefore used once for validation.
+
+```{dot}
+//| label: fig-cross-validation
+//| fig-cap: "Three-fold cross-validation. Each fold is used once for validation and twice for training."
+//| fig-align: center
+
+digraph cross_validation {
+    graph [
+        rankdir=TB,
+        bgcolor="transparent",
+        nodesep=0.18,
+        ranksep=0.45,
+        pad=0.2
+    ];
+
+    node [
+        shape=box,
+        style="rounded,filled",
+        fontname="Arial",
+        fontsize=11,
+        width=1.65,
+        height=0.55,
+        margin="0.12,0.08"
+    ];
+
+    edge [style=invis];
+
+    subgraph cluster_iteration1 {
+        label="Iteration 1";
+        style="rounded";
+        color="#888888";
+
+        A1 [label="Fold 1\nTraining", fillcolor="#DCEEFF", color="#4A78A8"];
+        A2 [label="Fold 2\nTraining", fillcolor="#DCEEFF", color="#4A78A8"];
+        A3 [label="Fold 3\nValidation", fillcolor="#F8D7DA", color="#A94442"];
+
+        {rank=same; A1; A2; A3;}
+        A1 -> A2 -> A3;
+    }
+
+    subgraph cluster_iteration2 {
+        label="Iteration 2";
+        style="rounded";
+        color="#888888";
+
+        B1 [label="Fold 1\nTraining", fillcolor="#DCEEFF", color="#4A78A8"];
+        B2 [label="Fold 2\nValidation", fillcolor="#F8D7DA", color="#A94442"];
+        B3 [label="Fold 3\nTraining", fillcolor="#DCEEFF", color="#4A78A8"];
+
+        {rank=same; B1; B2; B3;}
+        B1 -> B2 -> B3;
+    }
+
+    subgraph cluster_iteration3 {
+        label="Iteration 3";
+        style="rounded";
+        color="#888888";
+
+        C1 [label="Fold 1\nValidation", fillcolor="#F8D7DA", color="#A94442"];
+        C2 [label="Fold 2\nTraining", fillcolor="#DCEEFF", color="#4A78A8"];
+        C3 [label="Fold 3\nTraining", fillcolor="#DCEEFF", color="#4A78A8"];
+
+        {rank=same; C1; C2; C3;}
+        C1 -> C2 -> C3;
+    }
+
+    A1 -> B1;
+    B1 -> C1;
+}
+```
+
+As illustrated in @fig-cross-validation, the validation observations change in every iteration. This produces a more stable estimate of generalization performance than a single train–validation split.
+
+### Manual implementation
+
+The following implementation exposes the internal logic of stratified cross-validation. Stratification preserves approximately the same class proportions in every fold.
+
+```{python}
+#| label: manual-cross-validation
+#| code-fold: true
+
+from sklearn.base import clone
+from sklearn.model_selection import StratifiedKFold
+
+skfolds = StratifiedKFold(
+    n_splits=3,
+    shuffle=True,
+    random_state=42
+)
+
+for fold, (train_index, valid_index) in enumerate(
+    skfolds.split(X_train, y_train_5),
+    start=1
+):
+    clone_clf = clone(sgd_clf)
+
+    X_train_fold = X_train[train_index]
+    y_train_fold = y_train_5[train_index]
+    X_valid_fold = X_train[valid_index]
+    y_valid_fold = y_train_5[valid_index]
+
+    clone_clf.fit(X_train_fold, y_train_fold)
+    y_valid_pred = clone_clf.predict(X_valid_fold)
+
+    accuracy = (y_valid_pred == y_valid_fold).mean()
+    print(f"Fold {fold} accuracy: {accuracy:.4f}")
+```
+
+### Scikit-Learn implementation
+
+The same evaluation can be performed more concisely with `cross_val_score()`.
+
+```{python}
+#| label: binary-cross-validation
+
+from sklearn.model_selection import cross_val_score
+
+accuracy_scores = cross_val_score(
+    sgd_clf,
+    X_train,
+    y_train_5,
+    cv=3,
+    scoring="accuracy"
+)
+
+print("Fold accuracies:", accuracy_scores)
+print("Mean accuracy:", accuracy_scores.mean())
+```
+
+## Why accuracy is not enough
+
+The accuracy scores may appear impressive because they exceed 90%. However, only about 10% of the images are 5s. A classifier that always predicts *not 5* would therefore be correct roughly 90% of the time without identifying a single positive observation.
+
+The following baseline classifier always predicts the majority class.
+
+```{python}
+#| label: never-five-classifier
+
+from sklearn.base import BaseEstimator
+
+class Never5Classifier(BaseEstimator):
+    """Classifier that always predicts the negative class."""
+
+    def fit(self, X, y=None):
+        return self
+
+    def predict(self, X):
+        return np.zeros(shape=(len(X),), dtype=bool)
+```
+
+```{python}
+#| label: evaluate-never-five
+
+never_5_clf = Never5Classifier()
+
+baseline_scores = cross_val_score(
+    never_5_clf,
+    X_train,
+    y_train_5,
+    cv=3,
+    scoring="accuracy"
+)
+
+print("Baseline accuracies:", baseline_scores)
+print("Mean baseline accuracy:", baseline_scores.mean())
+```
+
+::: {.callout-warning title="Accuracy and class imbalance"}
+A high accuracy does not necessarily imply that a classifier recognizes the class of interest. When one class is much more frequent than another, accuracy may be dominated by the majority class.
+
+For imbalanced datasets, the confusion matrix, precision, recall, the F1-score, and precision–recall curves are generally more informative.
+:::
+
+# Confusion matrix
+
+## Cross-validated predictions
+
+A confusion matrix requires one prediction for every observation. These predictions should be generated without training the model on the same observations it is predicting.
+
+`cross_val_predict()` satisfies this requirement. Each observation receives a prediction from a model trained on the other folds.
+
+```{python}
+#| label: cross-validated-predictions
+
+from sklearn.model_selection import cross_val_predict
+
+y_train_pred = cross_val_predict(
+    sgd_clf,
+    X_train,
+    y_train_5,
+    cv=3
+)
+```
+
+## Structure of the matrix
+
+For binary classification, the confusion matrix contains four quantities:
+
+```{dot}
+//| label: fig-confusion-matrix
+//| fig-cap: "Structure of a binary confusion matrix."
+//| fig-align: center
+
+digraph confusion_matrix {
+    graph [
+        bgcolor="transparent",
+        pad=0.2,
+        nodesep=0.05,
+        ranksep=0.05
+    ];
+
+    node [
+        shape=box,
+        style="filled",
+        fontname="Arial",
+        fontsize=11,
+        width=2.1,
+        height=0.65
+    ];
+
+    title1 [label="", style=invis, width=1.8];
+    predneg [label="Predicted negative", fillcolor="#EAF2F8"];
+    predpos [label="Predicted positive", fillcolor="#EAF2F8"];
+
+    actualneg [label="Actual negative", fillcolor="#EAF2F8"];
+    tn [label="True negative (TN)", fillcolor="#E8F5E9"];
+    fp [label="False positive (FP)", fillcolor="#FDEDEC"];
+
+    actualpos [label="Actual positive", fillcolor="#EAF2F8"];
+    fn [label="False negative (FN)", fillcolor="#FDEDEC"];
+    tp [label="True positive (TP)", fillcolor="#E8F5E9"];
+
+    {rank=same; title1; predneg; predpos;}
+    {rank=same; actualneg; tn; fp;}
+    {rank=same; actualpos; fn; tp;}
+
+    title1 -> predneg -> predpos [style=invis];
+    actualneg -> tn -> fp [style=invis];
+    actualpos -> fn -> tp [style=invis];
+    title1 -> actualneg -> actualpos [style=invis];
+    predneg -> tn -> fn [style=invis];
+    predpos -> fp -> tp [style=invis];
+}
+```
+
+As shown in @fig-confusion-matrix:
+
+- **True negatives (TN):** non-5 images correctly classified as non-5;
+- **False positives (FP):** non-5 images incorrectly classified as 5;
+- **False negatives (FN):** images of 5 incorrectly classified as non-5;
+- **True positives (TP):** images of 5 correctly classified as 5.
+
+The matrix can be computed as follows:
+
+```{python}
+#| label: binary-confusion-matrix
+
+from sklearn.metrics import confusion_matrix
+
+cm = confusion_matrix(y_train_5, y_train_pred)
+cm
+```
+
+Scikit-Learn orders the matrix as:
+
+\[
+\begin{bmatrix}
+TN & FP \\
+FN & TP
+\end{bmatrix}.
+\]
+
+The four counts can be extracted directly.
+
+```{python}
+#| label: unpack-confusion-matrix
+
+tn, fp, fn, tp = cm.ravel()
+
+print("True negatives:", tn)
+print("False positives:", fp)
+print("False negatives:", fn)
+print("True positives:", tp)
+```
+
+A perfect classifier would produce no false positives and no false negatives.
+
+```{python}
+#| label: perfect-confusion-matrix
+
+y_train_perfect_predictions = y_train_5
+
+confusion_matrix(
+    y_train_5,
+    y_train_perfect_predictions
+)
+```
+
+# Precision, recall, and the F1-score
+
+## Precision
+
+Precision answers the question:
+
+> Among the observations predicted as positive, what proportion is truly positive?
+
+\[
+\text{Precision}
+=
+\frac{TP}{TP+FP}.
+\]
+
+A high precision means that the classifier produces relatively few false alarms.
+
+## Recall
+
+Recall answers a different question:
+
+> Among all actual positive observations, what proportion did the classifier identify?
+
+\[
+\text{Recall}
+=
+\frac{TP}{TP+FN}.
+\]
+
+Recall is also known as **sensitivity** or the **true positive rate**.
+
+```{python}
+#| label: precision-and-recall
+
+from sklearn.metrics import precision_score, recall_score
+
+precision = precision_score(y_train_5, y_train_pred)
+recall = recall_score(y_train_5, y_train_pred)
+
+print(f"Precision: {precision:.4f}")
+print(f"Recall: {recall:.4f}")
+```
+
+The values can also be verified directly from the confusion matrix.
+
+```{python}
+#| label: manual-precision-recall
+
+precision_manual = tp / (tp + fp)
+recall_manual = tp / (tp + fn)
+
+print(f"Manual precision: {precision_manual:.4f}")
+print(f"Manual recall: {recall_manual:.4f}")
+```
+
+## Specificity
+
+Specificity measures the proportion of actual negative observations that are correctly classified.
+
+\[
+\text{Specificity}
+=
+\frac{TN}{TN+FP}.
+\]
+
+```{python}
+#| label: specificity
+
+specificity = tn / (tn + fp)
+print(f"Specificity: {specificity:.4f}")
+```
+
+## F1-score
+
+Precision and recall often move in opposite directions. The F1-score combines them through their harmonic mean:
+
+\[
+F_1
+=
+2
+\frac{\text{Precision}\times\text{Recall}}
+{\text{Precision}+\text{Recall}}.
+\]
+
+```{python}
+#| label: f1-score
+
+from sklearn.metrics import f1_score
+
+f1 = f1_score(y_train_5, y_train_pred)
+print(f"F1-score: {f1:.4f}")
+```
+
+The harmonic mean penalizes models that achieve a high value for one metric and a low value for the other.
+
+::: {.callout-tip title="Selecting a metric"}
+The preferred metric depends on the consequences of each type of error.
+
+- Prioritize **precision** when false positives are costly.
+- Prioritize **recall** when false negatives are costly.
+- Use the **F1-score** when both errors matter and a single summary is needed.
+- Report several metrics when stakeholders need to understand the full error profile.
+:::
+
+# Decision thresholds
+
+## Decision scores
+
+Many classifiers do not directly produce a class label. They first compute a continuous score and then compare it with a decision threshold.
+
+For `SGDClassifier`, the score is returned by `decision_function()`.
+
+```{python}
+#| label: decision-score
+
+y_score_some_digit = sgd_clf.decision_function([some_digit])
+
+print("Decision score:", y_score_some_digit[0])
+print("Default prediction:", y_score_some_digit[0] >= 0)
+```
+
+The default threshold is 0. Increasing the threshold makes positive predictions more selective.
+
+```{python}
+#| label: compare-thresholds
+
+for threshold in [0, 2_000, 5_000, 8_000]:
+    prediction = y_score_some_digit[0] >= threshold
+    print(f"Threshold {threshold:>5}: predicted as 5 = {prediction}")
+```
+
+## Precision–recall trade-off
+
+To evaluate many possible thresholds, first obtain cross-validated decision scores.
+
+```{python}
+#| label: cross-validated-decision-scores
+
+y_scores = cross_val_predict(
+    sgd_clf,
+    X_train,
+    y_train_5,
+    cv=3,
+    method="decision_function"
+)
+```
+
+The `precision_recall_curve()` function computes precision and recall across a sequence of thresholds.
+
+```{python}
+#| label: compute-pr-curve
+
+from sklearn.metrics import precision_recall_curve
+
+precisions, recalls, thresholds = precision_recall_curve(
+    y_train_5,
+    y_scores
+)
+```
+
+```{python}
+#| label: fig-precision-recall-threshold
+#| fig-cap: "Precision and recall as functions of the decision threshold."
+#| fig-align: center
+
+plt.figure(figsize=(8, 5))
+plt.plot(thresholds, precisions[:-1], label="Precision")
+plt.plot(thresholds, recalls[:-1], label="Recall")
+plt.xlabel("Decision threshold")
+plt.ylabel("Score")
+plt.ylim(0, 1)
+plt.grid(True)
+plt.legend()
+plt.show()
+```
+
+As shown in @fig-precision-recall-threshold, increasing the threshold typically raises precision but lowers recall.
+
+The same information can be displayed directly in precision–recall space.
+
+```{python}
+#| label: fig-precision-recall-curve
+#| fig-cap: "Precision–recall curve for the binary SGD classifier."
+#| fig-align: center
+
+plt.figure(figsize=(6, 5))
+plt.plot(recalls, precisions)
+plt.xlabel("Recall")
+plt.ylabel("Precision")
+plt.xlim(0, 1)
+plt.ylim(0, 1)
+plt.grid(True)
+plt.show()
+```
+
+## Choosing an operating threshold
+
+Suppose the application requires at least 90% precision. The corresponding threshold can be obtained programmatically.
+
+```{python}
+#| label: threshold-for-precision
+
+target_precision = 0.90
+threshold_index = np.argmax(precisions >= target_precision)
+threshold_90_precision = thresholds[threshold_index]
+
+print("Threshold for at least 90% precision:", threshold_90_precision)
+```
+
+```{python}
+#| label: evaluate-selected-threshold
+
+y_train_pred_90 = y_scores >= threshold_90_precision
+
+precision_90 = precision_score(y_train_5, y_train_pred_90)
+recall_90 = recall_score(y_train_5, y_train_pred_90)
+
+print(f"Precision: {precision_90:.4f}")
+print(f"Recall: {recall_90:.4f}")
+```
+
+::: {.callout-important title="Thresholds should reflect operational costs"}
+The threshold should not be selected only to maximize a generic metric. It should reflect the relative cost of false positives and false negatives, operational capacity, legal requirements, and the consequences of incorrect decisions.
+:::
+
+# ROC curves and ROC AUC
+
+## True positive and false positive rates
+
+The **receiver operating characteristic (ROC) curve** plots:
+
+- the true positive rate, which is the same as recall;
+- the false positive rate, defined as
+
+\[
+\text{FPR}
+=
+\frac{FP}{FP+TN}
+=
+1-\text{Specificity}.
+\]
+
+```{python}
+#| label: compute-roc
+
+from sklearn.metrics import roc_curve
+
+fpr, tpr, roc_thresholds = roc_curve(
+    y_train_5,
+    y_scores
+)
+```
+
+```{python}
+#| label: fig-roc-sgd
+#| fig-cap: "ROC curve for the binary SGD classifier."
+#| fig-align: center
+
+plt.figure(figsize=(6, 5))
+plt.plot(fpr, tpr, linewidth=2, label="SGD classifier")
+plt.plot([0, 1], [0, 1], linestyle="--", label="Random classifier")
+plt.xlabel("False positive rate")
+plt.ylabel("True positive rate")
+plt.xlim(0, 1)
+plt.ylim(0, 1)
+plt.grid(True)
+plt.legend()
+plt.show()
+```
+
+A classifier closer to the upper-left corner achieves a high true positive rate with a low false positive rate.
+
+## Area under the ROC curve
+
+The ROC AUC summarizes the ROC curve as a single number:
+
+- 1.0 represents perfect discrimination;
+- 0.5 corresponds to random ranking;
+- values below 0.5 indicate rankings worse than random.
+
+```{python}
+#| label: roc-auc-sgd
+
+from sklearn.metrics import roc_auc_score
+
+sgd_roc_auc = roc_auc_score(y_train_5, y_scores)
+print(f"SGD ROC AUC: {sgd_roc_auc:.4f}")
+```
+
+::: {.callout-note title="ROC or precision–recall?"}
+The precision–recall curve is usually more informative when the positive class is rare or when false positives are especially important. ROC curves may appear optimistic in highly imbalanced problems because the large number of true negatives can keep the false positive rate small.
+:::
+
+## Comparing classifiers
+
+A random forest produces class probabilities rather than decision scores.
+
+```{python}
+#| label: random-forest-probabilities
+#| code-fold: true
+
+from sklearn.ensemble import RandomForestClassifier
+
+forest_clf = RandomForestClassifier(
+    n_estimators=100,
+    random_state=42,
+    n_jobs=-1
+)
+
+y_probas_forest = cross_val_predict(
+    forest_clf,
+    X_train,
+    y_train_5,
+    cv=3,
+    method="predict_proba",
+    n_jobs=-1
+)
+
+y_scores_forest = y_probas_forest[:, 1]
+```
+
+```{python}
+#| label: compare-roc-classifiers
+
+fpr_forest, tpr_forest, _ = roc_curve(
+    y_train_5,
+    y_scores_forest
+)
+
+forest_roc_auc = roc_auc_score(
+    y_train_5,
+    y_scores_forest
+)
+
+print(f"SGD ROC AUC: {sgd_roc_auc:.4f}")
+print(f"Random forest ROC AUC: {forest_roc_auc:.4f}")
+```
+
+```{python}
+#| label: fig-roc-comparison
+#| fig-cap: "ROC curves for the SGD classifier and random forest."
+#| fig-align: center
+
+plt.figure(figsize=(6, 5))
+plt.plot(fpr, tpr, linestyle=":", label=f"SGD (AUC = {sgd_roc_auc:.3f})")
+plt.plot(
+    fpr_forest,
+    tpr_forest,
+    label=f"Random forest (AUC = {forest_roc_auc:.3f})"
+)
+plt.plot([0, 1], [0, 1], linestyle="--")
+plt.xlabel("False positive rate")
+plt.ylabel("True positive rate")
+plt.xlim(0, 1)
+plt.ylim(0, 1)
+plt.grid(True)
+plt.legend()
+plt.show()
+```
+
+A stronger comparison should also consider precision, recall, calibration, computational cost, interpretability, and the operating threshold required by the application.
+
+# Multiclass classification
+
+Binary classifiers distinguish between two classes. Multiclass classifiers assign observations to one of three or more mutually exclusive classes.
+
+MNIST contains ten target classes:
+
+\[
+\{0,1,2,3,4,5,6,7,8,9\}.
+\]
+
+## One-versus-rest and one-versus-one
+
+Some algorithms support multiclass classification directly. Others combine several binary classifiers.
+
+**One-versus-rest (OvR)** trains one classifier per class. Each classifier distinguishes its class from all remaining classes. For \(K\) classes, OvR trains \(K\) classifiers.
+
+**One-versus-one (OvO)** trains one classifier for every pair of classes. The number of classifiers is
+
+\[
+\frac{K(K-1)}{2}.
+\]
+
+For MNIST, \(K=10\), so OvO trains
+
+\[
+\frac{10(10-1)}{2}=45
+\]
+
+binary classifiers.
+
+## Multiclass support vector machine
+
+Training a nonlinear SVC on all 60,000 observations may be computationally expensive. The following example uses a subset for demonstration.
+
+```{python}
+#| label: train-multiclass-svc
+#| code-fold: true
+
+from sklearn.svm import SVC
+
+svc_training_size = 10_000
+
+svm_clf = SVC()
+svm_clf.fit(
+    X_train[:svc_training_size],
+    y_train[:svc_training_size]
+)
+
+svm_prediction = svm_clf.predict([some_digit])
+print("SVC prediction:", svm_prediction[0])
+```
+
+The decision function returns one score per class.
+
+```{python}
+#| label: svc-decision-scores
+
+some_digit_scores = svm_clf.decision_function([some_digit])
+predicted_index = np.argmax(some_digit_scores)
+
+print("Decision scores:", some_digit_scores)
+print("Predicted class:", svm_clf.classes_[predicted_index])
+```
+
+::: {.callout-warning title="Class indices and class labels"}
+The position of the largest score is an array index. The corresponding class label should always be retrieved through the classifier's `classes_` attribute. An index and a class label are not guaranteed to be identical.
+:::
+
+## Forcing a one-versus-rest strategy
+
+```{python}
+#| label: explicit-ovr
+#| code-fold: true
+
+from sklearn.multiclass import OneVsRestClassifier
+
+ovr_clf = OneVsRestClassifier(SVC())
+ovr_clf.fit(
+    X_train[:svc_training_size],
+    y_train[:svc_training_size]
+)
+
+print("OvR prediction:", ovr_clf.predict([some_digit])[0])
+print("Number of binary estimators:", len(ovr_clf.estimators_))
+```
+
+## Native multiclass classification with SGD
+
+`SGDClassifier` supports multiclass classification directly.
+
+```{python}
+#| label: train-multiclass-sgd
+
+multiclass_sgd = SGDClassifier(random_state=42)
+multiclass_sgd.fit(X_train, y_train)
+
+print("Prediction:", multiclass_sgd.predict([some_digit])[0])
+print(
+    "Scores:",
+    multiclass_sgd.decision_function([some_digit])
+)
+```
+
+## Evaluating the multiclass model
+
+```{python}
+#| label: multiclass-sgd-cv
+
+multiclass_accuracy = cross_val_score(
+    multiclass_sgd,
+    X_train,
+    y_train,
+    cv=3,
+    scoring="accuracy"
+)
+
+print("Fold accuracies:", multiclass_accuracy)
+print("Mean accuracy:", multiclass_accuracy.mean())
+```
+
+Feature scaling often improves linear models because predictors measured on comparable scales contribute more evenly to optimization.
+
+The scaler must be fitted within each training fold to prevent information leakage. A pipeline guarantees that this happens correctly.
+
+```{python}
+#| label: scaled-multiclass-pipeline
+
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+scaled_sgd_clf = make_pipeline(
+    StandardScaler(),
+    SGDClassifier(random_state=42)
+)
+
+scaled_accuracy = cross_val_score(
+    scaled_sgd_clf,
+    X_train,
+    y_train,
+    cv=3,
+    scoring="accuracy",
+    n_jobs=-1
+)
+
+print("Scaled fold accuracies:", scaled_accuracy)
+print("Scaled mean accuracy:", scaled_accuracy.mean())
+```
+
+::: {.callout-important title="Avoid preprocessing leakage"}
+Do not fit a scaler on the complete dataset before cross-validation. The validation folds would influence the preprocessing parameters. A pipeline fits the scaler separately within each training fold.
+:::
+
+# Multiclass error analysis
+
+## Cross-validated predictions
+
+```{python}
+#| label: multiclass-cross-validated-predictions
+#| code-fold: true
+
+y_train_pred_multiclass = cross_val_predict(
+    scaled_sgd_clf,
+    X_train,
+    y_train,
+    cv=3,
+    n_jobs=-1
+)
+```
+
+## Confusion matrix visualization
+
+```{python}
+#| label: fig-multiclass-confusion-matrix
+#| fig-cap: "Confusion matrix for the multiclass SGD classifier."
+#| fig-align: center
+
+from sklearn.metrics import ConfusionMatrixDisplay
+
+fig, ax = plt.subplots(figsize=(8, 7))
+
+ConfusionMatrixDisplay.from_predictions(
+    y_train,
+    y_train_pred_multiclass,
+    cmap="gray",
+    ax=ax,
+    colorbar=False
+)
+
+plt.show()
+```
+
+The main diagonal represents correct predictions. Off-diagonal cells reveal which pairs of digits are confused.
+
+Raw counts may overemphasize frequent classes. Row-normalized values show the conditional distribution of predictions given the true class.
+
+```{python}
+#| label: fig-normalized-confusion-matrix
+#| fig-cap: "Row-normalized confusion matrix. Each row represents the distribution of predictions for one true class."
+#| fig-align: center
+
+fig, ax = plt.subplots(figsize=(8, 7))
+
+ConfusionMatrixDisplay.from_predictions(
+    y_train,
+    y_train_pred_multiclass,
+    normalize="true",
+    values_format=".0%",
+    cmap="gray",
+    ax=ax,
+    colorbar=False
+)
+
+plt.show()
+```
+
+To emphasize errors, the diagonal can be removed.
+
+```{python}
+#| label: fig-normalized-error-matrix
+#| fig-cap: "Normalized multiclass errors after removing the diagonal."
+#| fig-align: center
+
+multiclass_cm = confusion_matrix(
+    y_train,
+    y_train_pred_multiclass,
+    normalize="true"
+)
+
+np.fill_diagonal(multiclass_cm, 0)
+
+fig, ax = plt.subplots(figsize=(8, 7))
+image = ax.imshow(multiclass_cm, cmap="gray")
+
+ax.set_xlabel("Predicted class")
+ax.set_ylabel("True class")
+ax.set_xticks(range(10))
+ax.set_yticks(range(10))
+
+fig.colorbar(image, ax=ax)
+plt.show()
+```
+
+A bright off-diagonal cell indicates a frequent confusion. Error analysis should focus on whether the problem arises from:
+
+- insufficient or ambiguous training examples;
+- poorly represented subgroups;
+- inadequate preprocessing;
+- a model with insufficient flexibility;
+- annotation errors;
+- genuinely overlapping classes.
+
+## Classification report
+
+A classification report provides precision, recall, and F1-score for each class.
+
+```{python}
+#| label: multiclass-classification-report
+
+from sklearn.metrics import classification_report
+
+print(
+    classification_report(
+        y_train,
+        y_train_pred_multiclass,
+        digits=3
+    )
+)
+```
+
+For multiclass classification, metrics can be averaged in several ways:
+
+- **macro average:** unweighted mean across classes;
+- **weighted average:** class-specific metrics weighted by support;
+- **micro average:** counts all decisions globally before computing the metric.
+
+Macro averages are particularly useful when each class should receive equal importance.
+
+# Multilabel classification
+
+In multiclass classification, each observation belongs to exactly one class. In **multilabel classification**, an observation may belong to several classes simultaneously.
+
+For illustration, each digit receives two labels:
+
+1. whether it is large, meaning 7, 8, or 9;
+2. whether it is odd.
+
+```{python}
+#| label: create-multilabel-target
+
+y_train_large = y_train >= 7
+y_train_odd = y_train % 2 == 1
+
+y_multilabel = np.c_[
+    y_train_large,
+    y_train_odd
+]
+
+y_multilabel[:10]
+```
+
+A K-nearest-neighbors classifier supports multilabel targets.
+
+```{python}
+#| label: train-multilabel-knn
+#| code-fold: true
+
+from sklearn.neighbors import KNeighborsClassifier
+
+knn_clf = KNeighborsClassifier()
+knn_clf.fit(X_train, y_multilabel)
+
+print(
+    "Prediction [large, odd]:",
+    knn_clf.predict([some_digit])[0]
+)
+```
+
+Multilabel models can be evaluated with class-specific metrics or averaged scores. The appropriate choice depends on whether labels are equally important and whether label frequencies differ substantially.
+
+# Multioutput classification
+
+**Multioutput classification** generalizes multilabel classification by allowing each output to take more than two possible values.
+
+A classic example is image denoising. The model receives a noisy image and predicts the intensity of every output pixel. Each of the 784 pixels is treated as a separate multiclass output.
+
+```{python}
+#| label: create-noisy-mnist
+#| code-fold: true
+
+rng = np.random.default_rng(42)
+
+noise_train = rng.integers(
+    0,
+    100,
+    size=X_train.shape,
+    dtype=np.uint8
+)
+
+noise_test = rng.integers(
+    0,
+    100,
+    size=X_test.shape,
+    dtype=np.uint8
+)
+
+X_train_noisy = np.clip(
+    X_train + noise_train,
+    0,
+    255
+)
+
+X_test_noisy = np.clip(
+    X_test + noise_test,
+    0,
+    255
+)
+
+y_train_clean = X_train
+y_test_clean = X_test
+```
+
+The following figure compares a clean image with its noisy counterpart.
+
+```{python}
+#| label: fig-noisy-mnist-example
+#| fig-cap: "Clean and noisy versions of an MNIST image."
+#| fig-align: center
+
+fig, axes = plt.subplots(1, 2, figsize=(6, 3))
+
+axes[0].imshow(
+    y_test_clean[0].reshape(28, 28),
+    cmap="binary"
+)
+axes[0].set_title("Clean")
+axes[0].axis("off")
+
+axes[1].imshow(
+    X_test_noisy[0].reshape(28, 28),
+    cmap="binary"
+)
+axes[1].set_title("Noisy")
+axes[1].axis("off")
+
+plt.show()
+```
+
+Training a full K-nearest-neighbors denoising model on MNIST can be computationally intensive. The following optional block uses a reduced training sample.
+
+```{python}
+#| label: train-multioutput-knn
+#| code-fold: true
+#| eval: false
+
+denoising_training_size = 10_000
+
+knn_denoiser = KNeighborsClassifier()
+knn_denoiser.fit(
+    X_train_noisy[:denoising_training_size],
+    y_train_clean[:denoising_training_size]
+)
+
+clean_digit_prediction = knn_denoiser.predict(
+    [X_test_noisy[0]]
+)
+```
+
+```{python}
+#| label: fig-denoised-digit
+#| fig-cap: "Image reconstructed by the multioutput classifier."
+#| fig-align: center
+#| eval: false
+
+plt.figure(figsize=(3, 3))
+plt.imshow(
+    clean_digit_prediction.reshape(28, 28),
+    cmap="binary"
+)
+plt.axis("off")
+plt.show()
+```
+
+# Practical evaluation workflow
+
+A robust classification workflow should follow these steps:
+
+1. Define the target classes and the operational meaning of each error.
+2. Reserve a test set for final evaluation.
+3. Use stratified cross-validation for model development.
+4. Establish a simple baseline.
+5. Inspect the confusion matrix.
+6. Report metrics appropriate to the problem.
+7. Analyze performance across classes and relevant subgroups.
+8. Select the decision threshold using operational criteria.
+9. Evaluate the final model once on the untouched test set.
+10. Monitor performance after deployment because data distributions may change.
+
+## Final test evaluation
+
+Only after the modeling procedure has been selected should the final classifier be fitted on the complete training set and evaluated on the test set.
+
+```{python}
+#| label: final-binary-test-evaluation
+#| eval: false
+
+final_binary_clf = SGDClassifier(random_state=42)
+final_binary_clf.fit(X_train, y_train_5)
+
+y_test_pred = final_binary_clf.predict(X_test)
+
+test_cm = confusion_matrix(y_test_5, y_test_pred)
+test_precision = precision_score(y_test_5, y_test_pred)
+test_recall = recall_score(y_test_5, y_test_pred)
+test_f1 = f1_score(y_test_5, y_test_pred)
+
+print("Test confusion matrix:")
+print(test_cm)
+print(f"Test precision: {test_precision:.4f}")
+print(f"Test recall: {test_recall:.4f}")
+print(f"Test F1-score: {test_f1:.4f}")
+```
+
+The block is marked with `eval: false` to discourage repeated test-set evaluation during chapter development. Remove this option only when the complete modeling workflow has been finalized.
+
+# Summary
+
+This chapter introduced the principal concepts required to build and evaluate classification models.
+
+- Accuracy can be misleading when classes are imbalanced.
+- Cross-validation estimates generalization performance without using the test set.
+- The confusion matrix separates true positives, false positives, true negatives, and false negatives.
+- Precision measures the reliability of positive predictions.
+- Recall measures the ability to identify actual positives.
+- The F1-score balances precision and recall.
+- Decision thresholds determine the trade-off between different types of errors.
+- Precision–recall curves are especially informative when the positive class is rare.
+- ROC curves evaluate ranking performance across thresholds.
+- Multiclass error analysis requires class-level metrics and normalized confusion matrices.
+- Pipelines prevent preprocessing leakage during cross-validation.
+- Multilabel and multioutput classification extend the framework beyond one class per observation.
+
+# Exercises
+
+1. Train a binary classifier that detects the digit 3 instead of the digit 5. Compare its class balance with the original problem.
+
+2. Compute the accuracy, precision, recall, specificity, and F1-score of the digit-3 classifier.
+
+3. Identify a threshold that produces at least 95% recall. Report the resulting precision.
+
+4. Compare the SGD classifier and random forest using:
+   - ROC AUC;
+   - average precision;
+   - precision at 90% recall;
+   - training time.
+
+5. Explain why ROC AUC may produce an optimistic impression in a highly imbalanced classification problem.
+
+6. Construct a normalized confusion matrix for the multiclass classifier and identify the three largest off-diagonal errors.
+
+7. Train a multiclass model using logistic regression and compare its macro F1-score with the SGD classifier.
+
+8. Investigate whether scaling affects all digits equally. Compare class-specific recall before and after scaling.
+
+9. Create a multilabel target containing:
+   - whether the digit is even;
+   - whether it is greater than 5;
+   - whether it contains a closed loop.
+
+10. Design an evaluation strategy for a medical screening classifier in which false negatives are substantially more costly than false positives. Justify the metric and threshold you would prioritize.
