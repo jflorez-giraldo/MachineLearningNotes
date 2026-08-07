@@ -1,0 +1,114 @@
+// ======================================================
+// Tables
+// ======================================================
+
+.table,
+table {
+  width: 100%;
+  margin-top: 1.2rem;
+  margin-bottom: 1.6rem;
+
+  border-collapse: separate;
+  border-spacing: 0;
+
+  font-size: 0.94rem;
+  vertical-align: middle;
+}
+
+// ======================================================
+// Table headers
+// ======================================================
+
+.table thead th,
+table thead th {
+  padding: 0.7rem 0.8rem;
+
+  color: $table-header-color;
+  background-color: $table-header-bg;
+  border-top: 1px solid $table-border-color;
+  border-bottom: 2px solid rgba($primary, 0.35);
+
+  font-weight: 650;
+  vertical-align: bottom;
+}
+
+.table thead th:first-child,
+table thead th:first-child {
+  border-left: 1px solid $table-border-color;
+  border-top-left-radius: 0.5rem;
+}
+
+.table thead th:last-child,
+table thead th:last-child {
+  border-right: 1px solid $table-border-color;
+  border-top-right-radius: 0.5rem;
+}
+
+// ======================================================
+// Table cells
+// ======================================================
+
+.table tbody td,
+table tbody td {
+  padding: 0.65rem 0.8rem;
+
+  border-bottom: 1px solid $table-border-color;
+}
+
+.table tbody tr:nth-child(even),
+table tbody tr:nth-child(even) {
+  background-color: $table-stripe-bg;
+}
+
+.table tbody tr:hover,
+table tbody tr:hover {
+  background-color: $soft-blue;
+}
+
+// ======================================================
+// First and last columns
+// ======================================================
+
+.table tbody td:first-child,
+table tbody td:first-child {
+  border-left: 1px solid $table-border-color;
+}
+
+.table tbody td:last-child,
+table tbody td:last-child {
+  border-right: 1px solid $table-border-color;
+}
+
+// ======================================================
+// Last row
+// ======================================================
+
+.table tbody tr:last-child td:first-child,
+table tbody tr:last-child td:first-child {
+  border-bottom-left-radius: 0.5rem;
+}
+
+.table tbody tr:last-child td:last-child,
+table tbody tr:last-child td:last-child {
+  border-bottom-right-radius: 0.5rem;
+}
+
+// ======================================================
+// Captions
+// ======================================================
+
+table caption,
+.quarto-float-caption {
+  color: $muted-text;
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+// ======================================================
+// Responsive table wrapper
+// ======================================================
+
+.table-responsive {
+  margin: 1.2rem 0 1.6rem;
+  border-radius: 0.5rem;
+}

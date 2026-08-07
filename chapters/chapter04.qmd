@@ -8,6 +8,7 @@ execute:
 
 {{< chapter-actions >}}
 
+
 ## Logistic Regression
 
 *Logistic Regression*, also called *Logit Regression*, is commonly used to estimate the probability that an instance belongs to a particular class. For example, it can estimate the probability that an email is spam.
@@ -258,7 +259,9 @@ The Iris dataset provides a simple example of Logistic Regression. It contains s
 - *Iris versicolor*
 - *Iris virginica*
 
-![Flowers from the three Iris species.](../images/chapter04/imagen15.png){#fig-iris-flowers fig-align="center" width="70%"}
+::: {.concept-figure}
+![Flowers from the three Iris species.](../images/chapter04/imagen15.png){#fig-iris-flowers fig-align="center" width="70%" }
+:::
 
 The following block imports the required tools and loads the dataset as a pandas DataFrame. Loading it with `as_frame=True` allows the predictors to be selected using their descriptive column names.
 

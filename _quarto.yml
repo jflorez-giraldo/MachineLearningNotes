@@ -47,10 +47,12 @@ book:
         - chapters/chapter04.qmd
         - chapters/chapter05.qmd
         - chapters/chapter06.qmd
-
-    - part: "Part II — Neural Networks and Deep Learning"
-      chapters: 
+        - chapters/chapter07.qmd
+        - chapters/chapter08.qmd
         - chapters/chapter09.qmd
+
+    #- part: "Part II — Neural Networks and Deep Learning"
+      #chapters: 
 
     - part: "Additional Material"
       chapters:
@@ -70,9 +72,6 @@ format:
   html:
     theme:
       - cosmo
-      - styles/colors.scss
-      #- styles/admonitions.scss
-      - styles/buttons.scss
       - styles/custom.scss
     toc: true
     toc-title: "Contents"
@@ -87,7 +86,7 @@ format:
     #code-summary: "Show code"
     code-tools:
       source: true
-      toggle: true
+      toggle: false
       caption: "Code"
 
     code-line-numbers: false

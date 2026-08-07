@@ -1,0 +1,207 @@
+// ======================================================
+// Executable source-code containers
+// ======================================================
+
+div.sourceCode {
+  margin: 1.25rem 0;
+  overflow: hidden;
+
+  background-color: $code-block-bg;
+  border: 1px solid rgba($code-block-border, 0.75);
+  border-left: 3px solid $code-block-border;
+  border-radius: 0.7rem;
+
+box-shadow:
+  0 2px 6px rgba(33, 89, 132, 0.06),
+  0 6px 18px rgba(33, 89, 132, 0.05);
+}
+
+// The inner pre should not add another background or border
+div.sourceCode pre.sourceCode {
+  margin: 0;
+  padding: 1rem 1.15rem;
+
+  color: $code-text;
+  background-color: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+// Standalone code blocks not wrapped in div.sourceCode
+pre:not(.sourceCode) {
+  margin: 1.25rem 0;
+  padding: 1rem 1.15rem;
+  overflow-x: auto;
+
+  color: $code-text;
+  background-color: $code-block-bg;
+  border: 1px solid rgba($code-block-border, 0.75);
+  border-left: 3px solid $code-block-border;
+  border-radius: 0.7rem;
+}
+
+// ======================================================
+// Code typography
+// ======================================================
+
+pre,
+code,
+kbd,
+samp {
+  font-family: $font-family-monospace;
+}
+
+pre code {
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+// ======================================================
+// Inline code
+// ======================================================
+
+:not(pre) > code {
+  padding: 0.12rem 0.34rem;
+
+  color: #1d4e73;
+  background-color: $code-inline-bg;
+  border: 1px solid rgba($soft-blue-border, 0.65);
+  border-radius: 0.3rem;
+
+  font-size: 0.88em;
+  font-weight: 500;
+  white-space: normal;
+}
+
+// Avoid styling MathJax as ordinary inline code
+.math code,
+.katex code {
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+// ======================================================
+// Code-copy button
+// ======================================================
+
+.code-copy-button {
+  color: rgba($body-color, 0.55);
+  background-color: rgba(255, 255, 255, 0.72);
+  border-radius: 0.35rem;
+}
+
+.code-copy-button:hover {
+  color: $primary;
+  background-color: #ffffff;
+}
+
+// ======================================================
+// Folded code
+// ======================================================
+
+details.code-fold {
+  margin: 1.25rem 0;
+}
+
+details.code-fold > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+
+  padding: 0.4rem 0.7rem;
+
+  color: $primary;
+  background-color: #edf5fb;
+  border: 1px solid #b9d4e7;
+  border-radius: 0.4rem;
+
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+details.code-fold > summary:hover {
+  background-color: #e2eef8;
+}
+
+// ======================================================
+// Jupyter cell outputs
+// ======================================================
+
+.cell-output {
+  margin-top: 0.45rem;
+  margin-bottom: 1rem;
+}
+
+.cell-output pre {
+  padding: 0.8rem 1rem;
+
+  color: #33434d;
+  background-color: #f7fbfe;
+  border: 1px solid #e3e8eb;
+  border-left: 4px solid #b9d4e7;
+  border-radius: 0.45rem;
+
+  box-shadow: none;
+}
+
+.cell-output-display {
+  margin-top: 0.8rem;
+  margin-bottom: 1.2rem;
+}
+
+// ======================================================
+// Code filenames
+// ======================================================
+
+.code-with-filename .code-with-filename-file {
+  padding: 0.48rem 0.85rem;
+
+  color: $heading-color;
+  background-color: #edf5fb;
+  border: 1px solid rgba($code-block-border, 0.75);
+  border-bottom: 0;
+  border-radius: 0.7rem 0.7rem 0 0;
+
+  font-family: $font-family-monospace;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.code-with-filename div.sourceCode {
+  margin-top: 0;
+  border-radius: 0 0 0.7rem 0.7rem;
+}
+
+// ======================================================
+// Scrollbars inside long code blocks
+// ======================================================
+
+pre::-webkit-scrollbar {
+  height: 8px;
+}
+
+pre::-webkit-scrollbar-track {
+  background: rgba($soft-blue-border, 0.18);
+}
+
+pre::-webkit-scrollbar-thumb {
+  background: rgba($secondary, 0.42);
+  border-radius: 10px;
+}
+
+pre::-webkit-scrollbar-thumb:hover {
+  background: rgba($secondary, 0.65);
+}
+
+// ======================================================
+// Syntax highlighting
+// ======================================================
+
+code span.kw { color: #2f61c5; }      // keywords
+code span.fu { color: #0f766e; }      // functions
+code span.st { color: #b86b00; }      // strings
+code span.co { color: #6d7f8d; font-style: italic; } // comments
+code span.dv { color: #8b3fd6; }      // numbers
+code span.op { color: #475569; }      // operators

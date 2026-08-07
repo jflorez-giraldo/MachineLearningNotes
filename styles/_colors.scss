@@ -1,0 +1,82 @@
+// ======================================================
+// Brand colors
+// ======================================================
+
+$primary: #244f73;
+$secondary: #54788f;
+
+$body-color: #263238;
+$body-bg: #ffffff;
+
+$link-color: $primary;
+$link-hover-color: #173a58;
+
+// ======================================================
+// Typography colors
+// ======================================================
+
+$heading-color: #1f4059;
+$muted-text: #60717c;
+
+// ======================================================
+// Soft background colors
+// ======================================================
+
+$soft-blue: #f2f7fb;
+$soft-blue-border: #b8d3e5;
+
+$soft-green: #f2f9f6;
+$soft-green-border: #9dcdbb;
+
+$soft-yellow: #fff9e9;
+$soft-yellow-border: #e7c96f;
+
+$soft-red: #fff3f1;
+$soft-red-border: #dda7a0;
+
+$soft-purple: #f7f3fa;
+$soft-purple-border: #c7afd5;
+
+// ======================================================
+// Code colors
+// ======================================================
+
+$code-block-bg: #f3f8fc;
+$code-block-border: #a9cbe3;
+$code-inline-bg: #eaf3f9;
+$code-text: #263746;
+
+// ======================================================
+// Table colors
+// ======================================================
+
+$table-header-bg: #eaf1f6;
+$table-header-color: #203f55;
+$table-border-color: #d5e0e7;
+$table-stripe-bg: #f8fafb;
+
+// ======================================================
+// Bootstrap variables
+// ======================================================
+
+$font-family-sans-serif:
+  "Aptos",
+  "Segoe UI",
+  Roboto,
+  Helvetica,
+  Arial,
+  sans-serif;
+
+$font-family-monospace:
+  "SFMono-Regular",
+  Menlo,
+  Monaco,
+  Consolas,
+  "Liberation Mono",
+  monospace;
+
+$headings-color: $heading-color;
+$headings-font-weight: 600;
+
+$border-radius: 0.45rem;
+$border-radius-lg: 0.7rem;
