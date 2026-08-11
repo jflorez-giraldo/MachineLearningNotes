@@ -1,0 +1,883 @@
+---
+title: "Chapter -- End-to-End Machine Learning Project"
+jupyter: python3
+
+execute:
+  enabled: true
+---
+
+{{< chapter-actions >}}
+
+## Introduction
+
+A machine learning system is more than a fitted estimator. It begins with a decision that an organization needs to make, continues through data acquisition and validation, and ends with a model that can be evaluated, deployed, monitored, and replaced. This chapter develops that complete workflow using the California housing dataset and Scikit-Learn, following the project structure introduced by Géron [@geron2026homl].
+
+The objective is to predict the median house value of a California census district from demographic and geographic attributes. The example is a **supervised multiple regression** problem: every training observation has a numerical target, several predictors are available, and the system returns one prediction per district. We assume batch learning because the complete dataset fits in memory and does not arrive as a continuous stream.
+
+::: {.callout-note}
+## Learning objectives
+
+After completing this chapter, you should be able to:
+
+- translate a business objective into a supervised learning problem;
+- select a performance measure that matches the decision context;
+- create a reproducible train/test split before exploring the data;
+- identify missing values, skewed distributions, geographic structure, and target limitations;
+- build leakage-safe transformations with `Pipeline` and `ColumnTransformer`;
+- compare baselines and regression models using cross-validation;
+- tune preprocessing and model hyperparameters together;
+- diagnose residuals and subgroup errors before final evaluation;
+- evaluate a selected pipeline once on held-out data and quantify uncertainty;
+- describe the persistence, monitoring, and retraining requirements of a deployed model.
+:::
+
+```{python}
+#| label: end-to-end-imports
+#| include: false
+
+from pathlib import Path
+import tarfile
+import urllib.request
+
+import joblib
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from scipy.stats import randint
+
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.cluster import KMeans
+from sklearn.compose import ColumnTransformer
+from sklearn.dummy import DummyRegressor
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import root_mean_squared_error
+from sklearn.metrics.pairwise import rbf_kernel
+from sklearn.model_selection import (
+    RandomizedSearchCV,
+    cross_val_predict,
+    cross_validate,
+    train_test_split,
+)
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, StandardScaler
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.utils.validation import check_array, check_is_fitted
+
+RANDOM_STATE = 42
+DATA_URL = "https://github.com/ageron/data/raw/main/housing.tgz"
+DATA_DIR = Path(".quarto/data/chapter02")
+ARCHIVE_PATH = DATA_DIR / "housing.tgz"
+CSV_PATH = DATA_DIR / "housing" / "housing.csv"
+
+plt.style.use("seaborn-v0_8-whitegrid")
+```
+
+## Look at the Big Picture
+
+The fictional client is a real-estate investment system. Its downstream decisions use estimated district prices, so the target must remain numerical. If the system only needed labels such as *low*, *medium*, and *high*, the correct framing would instead be classification.
+
+Before opening a dataset, an end-to-end project should record four decisions:
+
+| Question | Decision for this project |
+|:---|:---|
+| What prediction is required? | Median house value for a district |
+| How will it be used? | As an input to an investment decision system |
+| What learning setting applies? | Supervised, multiple, univariate, batch regression |
+| What is the initial success measure? | Improvement over a simple median baseline on unseen districts |
+
+This framing is intentionally incomplete from a production perspective. A real project would also require an agreed cost for over- and under-prediction, a minimum useful improvement, latency requirements, and a review of legal and social constraints.
+
+### Select a Performance Measure
+
+The primary measure is the **root mean squared error** (RMSE). For $m$ observations, targets $y^{(i)}$, and predictions $h(\mathbf{x}^{(i)})$, it is
+
+$$
+\operatorname{RMSE}(\mathbf{X},\mathbf{y},h)
+=
+\sqrt{
+\frac{1}{m}
+\sum_{i=1}^{m}
+\left(h(\mathbf{x}^{(i)})-y^{(i)}\right)^2
+}.
+$$
+
+RMSE has the same units as the target, so an RMSE of 45,000 corresponds to a typical error scale of roughly USD 45,000. Squaring the residuals gives large errors more influence. When robustness to unusually large errors is more important, the **mean absolute error** (MAE) is a useful companion:
+
+$$
+\operatorname{MAE}(\mathbf{X},\mathbf{y},h)
+=
+\frac{1}{m}
+\sum_{i=1}^{m}
+\left|h(\mathbf{x}^{(i)})-y^{(i)}\right|.
+$$
+
+::: {.callout-important}
+RMSE evaluates predictive error, whereas the default `score()` method of most Scikit-Learn regressors returns $R^2$. Always name the measure being reported rather than referring to a generic "score."
+:::
+
+## Get the Data
+
+The dataset is a modified extract of the 1990 California census. Each row describes a census district rather than an individual house. The following loader caches the archive inside Quarto's temporary directory and checks that an archive member cannot escape the destination directory during extraction.
+
+```{python}
+#| label: load-housing-data
+
+EXPECTED_COLUMNS = {
+    "longitude",
+    "latitude",
+    "housing_median_age",
+    "total_rooms",
+    "total_bedrooms",
+    "population",
+    "households",
+    "median_income",
+    "median_house_value",
+    "ocean_proximity",
+}
+
+
+def safe_extract(tar, destination):
+    destination = destination.resolve()
+    for member in tar.getmembers():
+        member_path = (destination / member.name).resolve()
+        if member_path != destination and destination not in member_path.parents:
+            raise ValueError(f"Unsafe archive member: {member.name}")
+    tar.extractall(destination)
+
+
+def load_housing_data():
+    if not CSV_PATH.exists():
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        if not ARCHIVE_PATH.exists():
+            urllib.request.urlretrieve(DATA_URL, ARCHIVE_PATH)
+        with tarfile.open(ARCHIVE_PATH) as housing_tarball:
+            safe_extract(housing_tarball, DATA_DIR)
+
+    housing_data = pd.read_csv(CSV_PATH)
+    missing_columns = EXPECTED_COLUMNS.difference(housing_data.columns)
+    if missing_columns:
+        raise ValueError(f"Missing expected columns: {sorted(missing_columns)}")
+    if len(housing_data) != 20_640:
+        raise ValueError(f"Expected 20,640 rows, found {len(housing_data):,}")
+    return housing_data
+
+
+housing_full = load_housing_data()
+housing_full.head()
+```
+
+The ten variables mix geographic coordinates, district totals, medians, and one categorical measure.
+
+| Variable | Meaning | Role |
+|:---|:---|:---|
+| `longitude`, `latitude` | Geographic coordinates | Predictors |
+| `housing_median_age` | Median age of houses | Predictor |
+| `total_rooms`, `total_bedrooms` | District-level counts | Predictors |
+| `population`, `households` | District-level counts | Predictors |
+| `median_income` | Scaled median income | Predictor |
+| `ocean_proximity` | Location relative to the ocean | Categorical predictor |
+| `median_house_value` | Median district house value | Target |
+
+```{python}
+#| label: housing-data-audit
+
+data_audit = pd.DataFrame({
+    "dtype": housing_full.dtypes.astype(str),
+    "missing": housing_full.isna().sum(),
+    "missing_percent": housing_full.isna().mean().mul(100).round(2),
+    "unique_values": housing_full.nunique(),
+})
+data_audit
+```
+
+Only `total_bedrooms` contains missing values. Several other details require domain attention: `median_income` is scaled rather than expressed directly in dollars, `housing_median_age` is capped at 52, and the target is capped near USD 500,000. A regression model cannot recover distinctions that the recorded target has removed.
+
+```{python}
+#| label: ocean-proximity-counts
+
+housing_full["ocean_proximity"].value_counts().to_frame("districts")
+```
+
+## Create and Lock the Test Set
+
+Looking at all observations before creating a test set allows information about the final evaluation sample to influence feature and model choices. This **data snooping bias** can make test performance look better than future production performance.
+
+Median income is strongly related to house value. A purely random sample may underrepresent uncommon income ranges, so we create five broad income strata and preserve their proportions in an 80/20 split.
+
+```{python}
+#| label: stratified-housing-split
+
+housing_with_strata = housing_full.assign(
+    income_cat=pd.cut(
+        housing_full["median_income"],
+        bins=[0, 1.5, 3.0, 4.5, 6.0, np.inf],
+        labels=[1, 2, 3, 4, 5],
+    )
+)
+
+strat_train_set, strat_test_set = train_test_split(
+    housing_with_strata,
+    test_size=0.2,
+    stratify=housing_with_strata["income_cat"],
+    random_state=RANDOM_STATE,
+)
+
+random_train_set, random_test_set = train_test_split(
+    housing_with_strata,
+    test_size=0.2,
+    random_state=RANDOM_STATE,
+)
+
+
+def category_proportions(frame):
+    return frame["income_cat"].value_counts(normalize=True).sort_index()
+
+
+split_comparison = pd.DataFrame({
+    "overall_percent": category_proportions(housing_with_strata) * 100,
+    "random_percent": category_proportions(random_test_set) * 100,
+    "stratified_percent": category_proportions(strat_test_set) * 100,
+})
+split_comparison["random_relative_error_percent"] = (
+    100
+    * (split_comparison["random_percent"] - split_comparison["overall_percent"])
+    / split_comparison["overall_percent"]
+)
+split_comparison["stratified_relative_error_percent"] = (
+    100
+    * (split_comparison["stratified_percent"] - split_comparison["overall_percent"])
+    / split_comparison["overall_percent"]
+)
+split_comparison.round(2)
+```
+
+The temporary stratum is not a model feature. It is removed immediately after splitting, and the test set is not inspected again until the final model has been selected.
+
+```{python}
+#| label: finalize-housing-split
+
+strat_train_set = strat_train_set.drop(columns="income_cat")
+strat_test_set = strat_test_set.drop(columns="income_cat")
+
+housing = strat_train_set.drop(columns="median_house_value").copy()
+housing_labels = strat_train_set["median_house_value"].copy()
+
+assert len(strat_train_set) == 16_512
+assert len(strat_test_set) == 4_128
+
+pd.Series({
+    "training_rows": len(strat_train_set),
+    "test_rows_locked": len(strat_test_set),
+})
+```
+
+::: {.callout-note}
+For datasets that change repeatedly, a stable identifier and hash-based assignment can keep observations in the same split across runs. Row numbers are safe identifiers only when existing rows are never deleted or reordered.
+:::
+
+## Explore the Training Data
+
+Exploration now uses a separate copy of the training set. This protects the held-out sample and makes experimental columns disposable.
+
+```{python}
+#| label: housing-training-summary
+
+housing_explore = strat_train_set.copy()
+housing_explore.describe().T.round(2)
+```
+
+### Distribution Shape
+
+```{python}
+#| label: fig-housing-histograms
+#| fig-cap: "Training-set distributions reveal different scales, right-skewed counts, and capped variables."
+#| fig-width: 10
+#| fig-height: 8
+#| code-fold: true
+#| code-summary: "Show code"
+
+numeric_columns = housing_explore.select_dtypes(include="number").columns
+housing_explore[numeric_columns].hist(
+    bins=40,
+    figsize=(10, 8),
+    color="#2878A4",
+    edgecolor="white",
+)
+plt.tight_layout()
+plt.show()
+```
+
+The count variables have long right tails. Such distributions can make linear distances and scale estimates depend heavily on a small number of districts. Logarithmic transformations will be incorporated into the preprocessing pipeline rather than applied directly to this exploratory copy.
+
+### Geographic Structure
+
+```{python}
+#| label: fig-housing-geography
+#| fig-cap: "District location, population, and median house value in the training set."
+#| fig-width: 8
+#| fig-height: 6
+#| code-fold: true
+#| code-summary: "Show code"
+
+housing_explore.plot(
+    kind="scatter",
+    x="longitude",
+    y="latitude",
+    s=housing_explore["population"] / 120,
+    c="median_house_value",
+    cmap="viridis",
+    colorbar=True,
+    alpha=0.35,
+    figsize=(8, 6),
+)
+plt.title("California housing districts")
+plt.show()
+```
+
+The densest regions align with major population centers, while prices vary strongly across space. Longitude and latitude are therefore more useful as a joint geographic representation than as two unrelated linear columns.
+
+### Correlations and Candidate Features
+
+```{python}
+#| label: housing-correlations
+
+housing_correlations = (
+    housing_explore.corr(numeric_only=True)["median_house_value"]
+    .sort_values(ascending=False)
+    .to_frame("pearson_correlation")
+)
+housing_correlations.round(3)
+```
+
+```{python}
+#| label: fig-income-house-value
+#| fig-cap: "Median income has the strongest simple linear association with median house value, while the target ceiling remains visible."
+#| fig-width: 8
+#| fig-height: 5
+#| code-fold: true
+#| code-summary: "Show code"
+
+housing_explore.plot(
+    kind="scatter",
+    x="median_income",
+    y="median_house_value",
+    alpha=0.15,
+    color="#C44E52",
+    figsize=(8, 5),
+)
+plt.show()
+```
+
+Pearson correlation measures linear association, not causation or general dependence. The horizontal concentrations in @fig-income-house-value also show that measurement artifacts can become learnable patterns.
+
+Ratios can express district structure better than raw totals. For example, the fraction of rooms that are bedrooms is more comparable across differently sized districts.
+
+```{python}
+#| label: engineered-feature-correlations
+
+housing_engineered = housing_explore.assign(
+    rooms_per_house=housing_explore["total_rooms"] / housing_explore["households"],
+    bedrooms_ratio=housing_explore["total_bedrooms"] / housing_explore["total_rooms"],
+    people_per_house=housing_explore["population"] / housing_explore["households"],
+)
+
+housing_engineered.corr(numeric_only=True)["median_house_value"].sort_values(
+    ascending=False
+).to_frame("pearson_correlation").round(3)
+```
+
+## Prepare the Data
+
+Preparation must be learned from training folds, not from the complete dataset. Scikit-Learn pipelines enforce this sequence during fitting, cross-validation, tuning, and inference.
+
+### A Geographic Similarity Transformer
+
+`ClusterSimilarity` learns geographic centers with K-Means and replaces each coordinate pair with radial basis function (RBF) similarities. For a point $\mathbf{x}$ and cluster center $\boldsymbol{\mu}_k$,
+
+$$
+s_k(\mathbf{x})
+=
+\exp\left(-\gamma\lVert\mathbf{x}-\boldsymbol{\mu}_k\rVert_2^2\right).
+$$
+
+The resulting features describe proximity to learned regions without assuming that price changes linearly with longitude or latitude.
+
+```{python}
+#| label: define-cluster-similarity
+
+class ClusterSimilarity(BaseEstimator, TransformerMixin):
+    def __init__(self, n_clusters=10, gamma=1.0, random_state=None):
+        self.n_clusters = n_clusters
+        self.gamma = gamma
+        self.random_state = random_state
+
+    def fit(self, X, y=None, sample_weight=None):
+        X = check_array(X)
+        self.n_features_in_ = X.shape[1]
+        self.kmeans_ = KMeans(
+            n_clusters=self.n_clusters,
+            n_init=10,
+            random_state=self.random_state,
+        )
+        self.kmeans_.fit(X, sample_weight=sample_weight)
+        return self
+
+    def transform(self, X):
+        check_is_fitted(self, "kmeans_")
+        X = check_array(X)
+        return rbf_kernel(X, self.kmeans_.cluster_centers_, gamma=self.gamma)
+
+    def get_feature_names_out(self, input_features=None):
+        check_is_fitted(self, "kmeans_")
+        return np.array([
+            f"cluster_{cluster_id}_similarity"
+            for cluster_id in range(self.n_clusters)
+        ])
+```
+
+### One Reusable Preprocessing Graph
+
+The final graph performs the following operations:
+
+- median imputation for numerical inputs;
+- most-frequent imputation and one-hot encoding for `ocean_proximity`;
+- three robust ratio features;
+- log transformations for positive, heavy-tailed columns;
+- geographic cluster similarities;
+- standardization of numerical outputs.
+
+```{python}
+#| label: build-housing-preprocessing
+
+def column_ratio(X):
+    numerator = X[:, [0]]
+    denominator = np.maximum(X[:, [1]], np.finfo(float).eps)
+    return numerator / denominator
+
+
+def ratio_name(transformer, input_features):
+    return ["ratio"]
+
+
+def ratio_pipeline():
+    return make_pipeline(
+        SimpleImputer(strategy="median"),
+        FunctionTransformer(column_ratio, feature_names_out=ratio_name),
+        StandardScaler(),
+    )
+
+
+log_pipeline = make_pipeline(
+    SimpleImputer(strategy="median"),
+    FunctionTransformer(np.log1p, feature_names_out="one-to-one"),
+    StandardScaler(),
+)
+
+default_numeric_pipeline = make_pipeline(
+    SimpleImputer(strategy="median"),
+    StandardScaler(),
+)
+
+categorical_pipeline = make_pipeline(
+    SimpleImputer(strategy="most_frequent"),
+    OneHotEncoder(handle_unknown="ignore"),
+)
+
+preprocessing = ColumnTransformer([
+    ("bedrooms", ratio_pipeline(), ["total_bedrooms", "total_rooms"]),
+    ("rooms_per_house", ratio_pipeline(), ["total_rooms", "households"]),
+    ("people_per_house", ratio_pipeline(), ["population", "households"]),
+    (
+        "log",
+        log_pipeline,
+        ["total_bedrooms", "total_rooms", "population", "households", "median_income"],
+    ),
+    (
+        "geo",
+        ClusterSimilarity(n_clusters=10, gamma=1.0, random_state=RANDOM_STATE),
+        ["latitude", "longitude"],
+    ),
+    ("cat", categorical_pipeline, ["ocean_proximity"]),
+    ("age", default_numeric_pipeline, ["housing_median_age"]),
+])
+
+housing_prepared = preprocessing.fit_transform(housing)
+feature_names = preprocessing.get_feature_names_out()
+
+assert housing_prepared.shape == (len(housing), 24)
+assert np.isfinite(housing_prepared).all()
+assert len(feature_names) == housing_prepared.shape[1]
+
+pd.Series({
+    "rows": housing_prepared.shape[0],
+    "prepared_features": housing_prepared.shape[1],
+    "finite_values": bool(np.isfinite(housing_prepared).all()),
+})
+```
+
+::: {.callout-warning}
+Calling `fit_transform()` above is useful for auditing the preprocessing graph. Model evaluation below receives the unfitted `preprocessing` object inside each pipeline, so imputation, scaling, one-hot categories, and geographic centers are relearned separately within every training fold.
+:::
+
+## Select and Train Models
+
+A model should first beat a deliberately simple baseline. `DummyRegressor(strategy="median")` ignores all predictors and predicts the training median. We compare it with linear regression, a decision tree, and a random forest using the same five-fold protocol.
+
+```{python}
+#| label: compare-housing-models
+
+candidate_models = {
+    "Median baseline": DummyRegressor(strategy="median"),
+    "Linear regression": LinearRegression(),
+    "Decision tree": DecisionTreeRegressor(random_state=RANDOM_STATE),
+    "Random forest": RandomForestRegressor(
+        n_estimators=80,
+        min_samples_leaf=1,
+        random_state=RANDOM_STATE,
+        n_jobs=-1,
+    ),
+}
+
+comparison_rows = []
+for model_name, estimator in candidate_models.items():
+    model_pipeline = make_pipeline(preprocessing, estimator)
+    scores = cross_validate(
+        model_pipeline,
+        housing,
+        housing_labels,
+        scoring="neg_root_mean_squared_error",
+        cv=5,
+        return_train_score=True,
+        n_jobs=1,
+    )
+    comparison_rows.append({
+        "model": model_name,
+        "training_rmse": -scores["train_score"].mean(),
+        "validation_rmse": -scores["test_score"].mean(),
+        "validation_std": scores["test_score"].std(),
+    })
+
+model_comparison = (
+    pd.DataFrame(comparison_rows)
+    .sort_values("validation_rmse")
+    .reset_index(drop=True)
+)
+model_comparison.round(0)
+```
+
+The training and validation columns answer different questions. A decision tree can memorize the training observations, but its validation error exposes poor generalization. The random forest is the strongest candidate, although its training-validation gap indicates remaining overfitting.
+
+## Fine-Tune the Pipeline
+
+Preprocessing choices are model hyperparameters. The number of geographic clusters is therefore tuned in the same search as the forest's feature sampling and leaf size. `RandomizedSearchCV` controls the computational budget directly and explores more distinct values than a small rectangular grid.
+
+```{python}
+#| label: tune-housing-pipeline
+
+forest_pipeline = make_pipeline(
+    preprocessing,
+    RandomForestRegressor(
+        n_estimators=100,
+        random_state=RANDOM_STATE,
+        n_jobs=-1,
+    ),
+)
+
+parameter_distributions = {
+    "columntransformer__geo__n_clusters": randint(8, 31),
+    "randomforestregressor__max_features": randint(4, 15),
+    "randomforestregressor__min_samples_leaf": randint(1, 5),
+}
+
+random_search = RandomizedSearchCV(
+    forest_pipeline,
+    param_distributions=parameter_distributions,
+    n_iter=8,
+    scoring="neg_root_mean_squared_error",
+    cv=3,
+    random_state=RANDOM_STATE,
+    n_jobs=1,
+    refit=True,
+    return_train_score=True,
+)
+random_search.fit(housing, housing_labels)
+
+search_results = (
+    pd.DataFrame(random_search.cv_results_)
+    .assign(
+        mean_validation_rmse=lambda frame: -frame["mean_test_score"],
+        std_validation_rmse=lambda frame: frame["std_test_score"],
+    )
+    .sort_values("mean_validation_rmse")
+)
+
+search_results[[
+    "mean_validation_rmse",
+    "std_validation_rmse",
+    "param_columntransformer__geo__n_clusters",
+    "param_randomforestregressor__max_features",
+    "param_randomforestregressor__min_samples_leaf",
+]].head().round(0)
+```
+
+```{python}
+#| label: best-housing-parameters
+
+best_model = random_search.best_estimator_
+
+pd.Series({
+    "best_cross_validated_rmse": -random_search.best_score_,
+    "candidate_configurations": len(random_search.cv_results_["params"]),
+    "cross_validation_folds": random_search.cv,
+    **random_search.best_params_,
+})
+```
+
+The search is intentionally modest so the chapter remains executable. A production search would use a larger budget, examine learning curves, and compare several model families rather than assuming that a random forest is optimal.
+
+## Analyze the Model and Its Errors
+
+### Feature Importance
+
+```{python}
+#| label: housing-feature-importance
+
+best_preprocessing = best_model.named_steps["columntransformer"]
+best_forest = best_model.named_steps["randomforestregressor"]
+
+feature_importance = (
+    pd.Series(
+        best_forest.feature_importances_,
+        index=best_preprocessing.get_feature_names_out(),
+        name="importance",
+    )
+    .sort_values(ascending=False)
+)
+feature_importance.head(12).to_frame().round(3)
+```
+
+Importance is a model-specific description of how the forest used available variables; it is not a causal effect. Correlated or duplicated representations can also divide importance across several features.
+
+### Out-of-Fold Diagnostics
+
+To avoid diagnosing in-sample residuals, the following predictions are generated out of fold. The tuned hyperparameters have already been selected on the training set, so these plots are diagnostic rather than a new unbiased performance estimate.
+
+```{python}
+#| label: housing-out-of-fold-predictions
+
+oof_predictions = cross_val_predict(
+    best_model,
+    housing,
+    housing_labels,
+    cv=3,
+    n_jobs=1,
+)
+
+diagnostics = strat_train_set[[
+    "median_house_value",
+    "ocean_proximity",
+    "latitude",
+]].copy()
+diagnostics["prediction"] = oof_predictions
+diagnostics["residual"] = (
+    diagnostics["median_house_value"] - diagnostics["prediction"]
+)
+diagnostics["absolute_error"] = diagnostics["residual"].abs()
+```
+
+```{python}
+#| label: fig-housing-residual-diagnostics
+#| fig-cap: "Out-of-fold predictions and residuals reveal where the selected pipeline remains inaccurate."
+#| fig-width: 10
+#| fig-height: 4.5
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig, axes = plt.subplots(1, 2, figsize=(10, 4.5))
+
+axes[0].scatter(
+    diagnostics["median_house_value"],
+    diagnostics["prediction"],
+    alpha=0.12,
+    s=12,
+    color="#2878A4",
+)
+value_limits = [
+    diagnostics["median_house_value"].min(),
+    diagnostics["median_house_value"].max(),
+]
+axes[0].plot(value_limits, value_limits, color="#C44E52", linestyle="--")
+axes[0].set_xlabel("Actual value")
+axes[0].set_ylabel("Out-of-fold prediction")
+axes[0].set_title("Actual versus predicted")
+
+axes[1].hist(diagnostics["residual"], bins=50, color="#55A868", edgecolor="white")
+axes[1].axvline(0, color="black", linestyle="--")
+axes[1].set_xlabel("Residual: actual - predicted")
+axes[1].set_ylabel("Districts")
+axes[1].set_title("Residual distribution")
+
+plt.tight_layout()
+plt.show()
+```
+
+Global RMSE can hide systematic failures. We inspect mean absolute error and RMSE across target ranges, ocean categories, and broad geographic regions.
+
+```{python}
+#| label: housing-error-slices
+
+diagnostics["value_band"] = pd.qcut(
+    diagnostics["median_house_value"],
+    q=4,
+    labels=["lowest", "lower-middle", "upper-middle", "highest"],
+    duplicates="drop",
+)
+diagnostics["region"] = np.where(
+    diagnostics["latitude"] >= diagnostics["latitude"].median(),
+    "north",
+    "south",
+)
+
+
+def error_by_group(frame, group_column):
+    rows = []
+    for group_name, group in frame.groupby(group_column, observed=True):
+        rows.append({
+            "group": group_name,
+            "districts": len(group),
+            "mae": group["absolute_error"].mean(),
+            "rmse": root_mean_squared_error(
+                group["median_house_value"], group["prediction"]
+            ),
+        })
+    return pd.DataFrame(rows).set_index("group")
+
+
+error_by_group(diagnostics, "value_band").round(0)
+```
+
+```{python}
+#| label: housing-geographic-error-slices
+
+pd.concat(
+    {
+        "ocean proximity": error_by_group(diagnostics, "ocean_proximity"),
+        "broad region": error_by_group(diagnostics, "region"),
+    },
+    names=["slice", "group"],
+).round(0)
+```
+
+The `ISLAND` category contains only five observations in the complete dataset, so its error estimate is unstable. Reporting subgroup sample sizes prevents a noisy estimate from being mistaken for reliable evidence. A real fairness review would select groups from the system's impact and legal context rather than only from convenient columns.
+
+## Evaluate Once on the Test Set
+
+Model selection is now complete. The held-out set can be opened once to estimate final generalization performance.
+
+```{python}
+#| label: final-housing-evaluation
+
+X_test = strat_test_set.drop(columns="median_house_value")
+y_test = strat_test_set["median_house_value"].copy()
+
+final_predictions = best_model.predict(X_test)
+final_rmse = root_mean_squared_error(y_test, final_predictions)
+
+rng = np.random.default_rng(RANDOM_STATE)
+squared_errors = np.square(final_predictions - y_test.to_numpy())
+bootstrap_rmse = np.empty(2_000)
+
+for sample_id in range(len(bootstrap_rmse)):
+    bootstrap_sample = rng.choice(squared_errors, size=len(squared_errors), replace=True)
+    bootstrap_rmse[sample_id] = np.sqrt(bootstrap_sample.mean())
+
+confidence_interval = np.percentile(bootstrap_rmse, [2.5, 97.5])
+
+pd.Series({
+    "test_rmse": final_rmse,
+    "bootstrap_95_percent_lower": confidence_interval[0],
+    "bootstrap_95_percent_upper": confidence_interval[1],
+}).round(0)
+```
+
+The interval describes uncertainty from sampling districts similar to those in the test set. It does not include distribution shift, errors in the recorded target, or uncertainty about how the model will affect business decisions.
+
+::: {.callout-warning}
+Do not return to hyperparameter tuning after seeing the test result. Doing so turns the test set into another validation set and removes its value as an independent estimate.
+:::
+
+## Persist and Test the Complete Pipeline
+
+Persisting only the forest would omit imputation, feature engineering, scaling, category handling, and geographic clusters. The deployment artifact must contain the complete fitted pipeline.
+
+```{python}
+#| label: persist-housing-pipeline
+
+artifact_dir = Path(".quarto/artifacts/chapter02")
+artifact_dir.mkdir(parents=True, exist_ok=True)
+model_path = artifact_dir / "california_housing_pipeline.joblib"
+
+joblib.dump(best_model, model_path)
+reloaded_model = joblib.load(model_path)
+
+original_predictions = best_model.predict(X_test.iloc[:5])
+reloaded_predictions = reloaded_model.predict(X_test.iloc[:5])
+
+assert np.allclose(original_predictions, reloaded_predictions)
+
+pd.DataFrame({
+    "original_prediction": original_predictions,
+    "reloaded_prediction": reloaded_predictions,
+}).round(0)
+```
+
+`joblib` and pickle-based files can execute code during loading, so they must never be accepted from untrusted sources. Reliable deployment also requires compatible dependency versions, importable custom transformer definitions, a documented input schema, and a smoke test after loading.
+
+## Launch, Monitor, and Maintain
+
+Deployment changes the project from a static experiment into an operating system. A minimal production plan should include the following controls.
+
+| Stage | Required controls |
+|:---|:---|
+| Before prediction | Validate schema, ranges, missingness, and unknown categories |
+| During service | Monitor latency, failures, prediction distributions, and data drift |
+| After labels arrive | Track RMSE, MAE, residual bias, and subgroup performance |
+| Retraining | Version data and code, compare challenger and current models, require approval |
+| Recovery | Preserve prior artifacts and support a tested rollback procedure |
+
+Monitoring only technical uptime is insufficient. A healthy service can still make poor predictions because an upstream field changed meaning, a new category appeared, or the housing market moved away from the 1990 training distribution.
+
+::: {.callout-tip}
+A useful model report should state the intended use, training data, validation design, primary metrics, error slices, known limitations, dependency versions, and the conditions that trigger retraining or rollback.
+:::
+
+## Chapter Summary
+
+An end-to-end machine learning project connects technical choices to an operational objective:
+
+- frame the decision and choose a meaningful measure before modeling;
+- automate and validate data acquisition;
+- isolate the test set before exploratory work;
+- fit every learned transformation inside the validation process;
+- compare against a simple baseline and diagnose overfitting;
+- tune preprocessing and model choices together;
+- inspect residuals and subgroup errors, not only a global score;
+- evaluate the selected pipeline once on held-out data;
+- persist the complete transformation and prediction graph;
+- plan monitoring, versioning, retraining, and rollback before deployment.
+
+The random forest is only one component. The reproducible workflow around it is the machine learning system.
+
+## Exercises
+
+1. Compute MAE for every candidate model. Does it produce the same ranking as RMSE? Explain why the two measures may disagree.
+2. Replace the five income strata with a different stratification strategy. Compare representation errors and justify which split is preferable.
+3. Add `SelectFromModel` to the model pipeline. Tune its threshold jointly with the regressor and report whether feature selection improves cross-validated RMSE.
+4. Train linear- and RBF-kernel `SVR` models on the first 5,000 training observations. Use randomized search and explain why full-data kernel SVR is computationally expensive.
+5. Replace `RandomizedSearchCV` with a small `GridSearchCV`. Compare the number of fitted models and the diversity of values explored under the same approximate budget.
+6. Implement a transformer that fits `KNeighborsRegressor` on latitude and longitude to create a smoothed local-income feature. Ensure that it follows the Scikit-Learn estimator API.
+7. Extend the error analysis with a subgroup or geographic partition that is meaningful for a proposed use of the model. Report sample size and uncertainty together with error.
+8. Write a concise model card covering intended use, exclusions, data limitations, metrics, risk controls, and retraining conditions.
+9. Apply the complete workflow to another regression dataset. Identify which assumptions and operational controls change when the data source changes.

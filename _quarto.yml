@@ -50,6 +50,7 @@ book:
         - chapters/chapter07.qmd
         - chapters/chapter08.qmd
         - chapters/chapter09.qmd
+        - chapters/chapter10.qmd
 
     #- part: "Part II — Neural Networks and Deep Learning"
       #chapters: 
@@ -124,6 +125,5 @@ execute:
   message: false
   echo: true
   cache: true
-
 
 
