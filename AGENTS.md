@@ -30,7 +30,7 @@ quarto render
 
 - `_quarto.yml` defines a single Quarto book with HTML and PDF outputs, `freeze: auto`, and project-root execution. A normal project render can traverse all 14 documents; `quarto render --execute` forces broad re-execution and must not be used for a chapter-only change.
 - For one changed chapter, use `quarto render chapters/chapterNN.qmd --to html --use-freezer`. This executes/renders only that file and updates its HTML freeze. The analogous PDF command updates its TeX freeze and PDF figures but may fail afterward when Quarto attempts to assemble the complete book; verify PDF with a standalone temporary project under `.tmp/` instead of rendering the root project.
-- GitHub Pages runs `quarto render --profile ci --use-freezer` without installing Python dependencies, so publication depends on committed frozen results. Verified with Quarto 1.9.38: `--profile ci` still resolves `freeze: auto`; `.github/workflows/_quarto-ci.yml` is not loaded as a Quarto profile from that location, and `--use-freezer` explicitly prevents re-execution.
+- GitHub Pages runs `quarto render --profile ci --to html --use-freezer` without installing Python dependencies, so publication depends on committed HTML freeze results. Verified with Quarto 1.9.38: `--profile ci` still resolves `freeze: auto`; `.github/workflows/_quarto-ci.yml` is not loaded as a Quarto profile from that location, and `--use-freezer` explicitly prevents re-execution. PDF assembly is validated locally because the Pages runner does not install TeX.
 - Focused checks after an executed chapter change:
 
 ```bash
