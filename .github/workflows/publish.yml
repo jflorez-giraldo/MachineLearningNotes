@@ -19,6 +19,10 @@ jobs:
 
       - name: Set up Quarto
         uses: quarto-dev/quarto-actions/setup@v2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          tinytex: true
 
       - name: Render book using frozen results
         run: quarto render --profile ci --use-freezer
