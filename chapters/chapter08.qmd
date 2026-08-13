@@ -2,9 +2,11 @@
 title: "Chapter -- Naive Bayes"
 jupyter: python3
 
-execute: 
+execute:
   enabled: true
 ---
+
+{{< chapter-actions >}}
 
 ## Introduction
 

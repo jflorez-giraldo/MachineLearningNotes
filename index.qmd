@@ -1,5 +1,137 @@
-# Preface {.unnumbered}
+---
+jupyter: python3
+---
 
-This is a Quarto book.
+# Machine Learning I {.unnumbered}
 
-To learn more about Quarto books visit <https://quarto.org/docs/books>.
+This book is a graduate-level course resource for students in **Applied
+Statistics, Data Science, Machine Learning**, and related quantitative fields.
+It connects statistical reasoning, mathematical foundations, computational
+experiments, and reproducible implementations with Scikit-Learn.
+
+```{python}
+#| label: fig-course-landscape
+#| fig-cap: "From optimization in parameter space to prediction in data space."
+#| fig-alt: "An optimization path over loss contours beside a nonlinear classification boundary."
+#| fig-align: center
+#| out-width: "80%"
+#| echo: false
+#| output: true
+
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.colors import ListedColormap
+from sklearn.datasets import make_moons
+from sklearn.svm import SVC
+
+rng_seed = 42
+navy = "#0b132b"
+blue = "#3a86ff"
+cyan = "#4cc9f0"
+green = "#80b918"
+coral = "#ff6b35"
+cream = "#f8f7f2"
+
+fig, axes = plt.subplots(1, 2, figsize=(11, 4.8), facecolor=navy)
+
+# Left: a reproducible optimization path on a correlated quadratic loss.
+ax = axes[0]
+ax.set_facecolor(navy)
+theta_0 = np.linspace(-3.4, 3.4, 320)
+theta_1 = np.linspace(-3.0, 3.0, 320)
+T0, T1 = np.meshgrid(theta_0, theta_1)
+loss = 0.55 * T0**2 + 1.25 * T1**2 + 0.72 * T0 * T1
+
+levels = np.geomspace(0.08, 13, 13)
+ax.contour(T0, T1, loss, levels=levels, cmap="winter", linewidths=1.15, alpha=0.75)
+
+theta = np.array([-3.0, 2.45])
+path = [theta.copy()]
+for _ in range(34):
+    gradient = np.array([1.10 * theta[0] + 0.72 * theta[1],
+                         2.50 * theta[1] + 0.72 * theta[0]])
+    theta = theta - 0.22 * gradient
+    path.append(theta.copy())
+path = np.asarray(path)
+
+ax.plot(path[:, 0], path[:, 1], color=coral, linewidth=2.3, zorder=4)
+ax.scatter(path[::3, 0], path[::3, 1], s=24, color=cream,
+           edgecolor=coral, linewidth=0.8, zorder=5)
+ax.scatter(0, 0, marker="*", s=180, color=green,
+           edgecolor=cream, linewidth=0.8, zorder=6)
+
+# Right: a nonlinear predictive model in the data space.
+ax = axes[1]
+ax.set_facecolor(navy)
+X, y = make_moons(n_samples=260, noise=0.22, random_state=rng_seed)
+model = SVC(kernel="rbf", C=2.0, gamma=1.6).fit(X, y)
+
+x0 = np.linspace(X[:, 0].min() - 0.45, X[:, 0].max() + 0.45, 320)
+x1 = np.linspace(X[:, 1].min() - 0.45, X[:, 1].max() + 0.45, 320)
+G0, G1 = np.meshgrid(x0, x1)
+grid = np.column_stack([G0.ravel(), G1.ravel()])
+scores = model.decision_function(grid).reshape(G0.shape)
+
+ax.contourf(G0, G1, scores, levels=[-10, 0, 10],
+            cmap=ListedColormap(["#102a43", "#183d3d"]), alpha=0.95)
+ax.contour(G0, G1, scores, levels=[-1, 0, 1],
+           colors=[cyan, cream, green], linewidths=[1.0, 2.0, 1.0],
+           linestyles=["--", "-", "--"], alpha=0.9)
+ax.scatter(X[y == 0, 0], X[y == 0, 1], s=25, color=cyan,
+           edgecolor=cream, linewidth=0.35, alpha=0.9)
+ax.scatter(X[y == 1, 0], X[y == 1, 1], s=25, color=green,
+           edgecolor=cream, linewidth=0.35, alpha=0.9)
+
+for ax in axes:
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+axes[0].set_title("LEARN", color=cream, fontsize=14, fontweight="bold", pad=12)
+axes[1].set_title("GENERALIZE", color=cream, fontsize=14, fontweight="bold", pad=12)
+fig.subplots_adjust(left=0.025, right=0.975, bottom=0.04, top=0.88, wspace=0.08)
+plt.show()
+```
+
+## What you will learn
+
+The course develops the ability to:
+
+- formulate applied questions as supervised or semi-supervised learning tasks;
+- construct reproducible, leakage-safe preprocessing and modeling pipelines;
+- connect objective functions and optimization algorithms to fitted models;
+- compare regression and classification methods with appropriate validation
+  designs and performance measures;
+- diagnose underfitting, overfitting, instability, and subgroup error;
+- interpret how model assumptions, regularization, and hyperparameters affect
+  generalization; and
+- justify model choices in terms of statistical evidence, computational cost,
+  and the intended use of predictions.
+
+## Learning path
+
+The material begins with an end-to-end machine learning project and rigorous
+classification assessment. It then opens the training process to study loss
+functions, optimization, regularization, and probabilistic prediction. The
+subsequent chapters examine support vector machines, decision trees, nearest
+neighbors, Naive Bayes models, ensemble methods, and learning from partially
+labeled data.
+
+Throughout this progression, algorithms are not treated as isolated recipes.
+Each method is studied through its assumptions, mathematical structure,
+implementation, diagnostics, and practical limitations.
+
+## Course resources
+
+Each substantive chapter combines explanatory text, notation, executable Python
+code, visual experiments, practical guidance, and exercises. The HTML edition
+supports navigation and code copying; chapter pages provide downloadable
+notebooks for experimentation, and the complete book is available as a PDF.
+
+The examples are inspired in part by *Hands-On Machine Learning with
+Scikit-Learn and PyTorch* [@geron2026homl] and are organized around the learning
+objectives of this graduate course.
+
+Begin with the [Preface](preface.qmd) for the expected background, study
+conventions, and methodological principles that guide the book.

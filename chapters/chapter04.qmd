@@ -1,187 +1,1039 @@
 ---
-title: "Chapter – Training Models"
+title: "Chapter -- Training Models"
 jupyter: python3
 
-execute: 
+execute:
   enabled: true
 ---
 
 {{< chapter-actions >}}
 
+## Introduction
 
-## Logistic Regression
+Chapter 2 treated estimators as components of an end-to-end regression workflow, while Chapter 3 developed an honest classification workflow. This chapter opens the estimator itself. It studies the mathematical functions learned by linear models, the objectives used to estimate their parameters, and the optimization and regularization choices that control their behavior.
 
-*Logistic Regression*, also called *Logit Regression*, is commonly used to estimate the probability that an instance belongs to a particular class. For example, it can estimate the probability that an email is spam.
+The progression is deliberate. Linear Regression introduces a weighted sum and a squared-error objective. Gradient Descent shows how an objective can be minimized iteratively. Polynomial features vary model complexity, while Ridge, Lasso, Elastic Net, and early stopping constrain that complexity. Logistic and Softmax Regression then reuse the same linear scores and optimization ideas for classification.
 
-If the estimated probability is greater than or equal to $50\%$, the model predicts that the instance belongs to the **positive class**, usually labeled $1$. Otherwise, it predicts that the instance belongs to the **negative class**, usually labeled $0$.
+Four terms must remain distinct:
 
-Despite its name, Logistic Regression is therefore primarily used as a **binary classification algorithm**.
+- **parameters** are learned during fitting, such as coefficients and intercepts;
+- **hyperparameters** are choices made before fitting, such as polynomial degree or regularization strength;
+- a **training objective** is the quantity minimized to estimate parameters;
+- an **evaluation metric** measures performance on data not used to fit those parameters.
 
-### Estimating Probabilities
+::: {.callout-note}
+## Learning objectives
 
-Logistic Regression begins by computing a weighted sum of the input features, including a bias term, just as Linear Regression does. However, instead of returning this score directly, it transforms it using the **logistic function**:
+After completing this chapter, you should be able to:
+
+- express Linear Regression in scalar, vector, and matrix form;
+- compare least-squares and iterative parameter estimation;
+- explain learning rate, feature scaling, epochs, and convergence;
+- use polynomial features to vary model complexity;
+- interpret training-validation curves without consulting the test set;
+- distinguish Ridge, Lasso, Elastic Net, and early stopping;
+- connect linear scores to Logistic and Softmax Regression;
+- select classification regularization with cross-validation and evaluate once on test data.
+:::
+
+```{python}
+#| label: chapter04-imports
+#| include: false
+
+from copy import deepcopy
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from matplotlib.colors import ListedColormap
+
+from sklearn.datasets import load_iris, make_regression
+from sklearn.linear_model import (
+    ElasticNet,
+    Lasso,
+    LinearRegression,
+    LogisticRegression,
+    Ridge,
+    SGDRegressor,
+)
+from sklearn.metrics import (
+    ConfusionMatrixDisplay,
+    accuracy_score,
+    log_loss,
+    root_mean_squared_error,
+)
+from sklearn.model_selection import (
+    GridSearchCV,
+    KFold,
+    StratifiedKFold,
+    cross_validate,
+    train_test_split,
+)
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import PolynomialFeatures, StandardScaler
+
+CHAPTER04_SEED = 42
+chapter04_rng = np.random.default_rng(CHAPTER04_SEED)
+plt.style.use("seaborn-v0_8-whitegrid")
+```
+
+## Linear Regression
+
+### A Linear Prediction Function
+
+For an observation with $n$ predictors, a linear model computes
 
 $$
-\hat{p}
+\widehat{y}
+=
+\theta_0
++
+\theta_1x_1
++
+\cdots
++
+\theta_nx_n.
+$$
+
+The intercept $\theta_0$ is also called the bias term. If an additional constant feature $x_0=1$ is included, the expression becomes
+
+$$
+\widehat{y}
 =
 h_{\boldsymbol{\theta}}(\mathbf{x})
 =
-\sigma\!\left(\mathbf{x}^{T}\boldsymbol{\theta}\right).
+\boldsymbol{\theta}^{\mathsf T}\mathbf{x}.
 $$
 
-The logistic function, denoted by $\sigma(\cdot)$, is a sigmoid-shaped function defined as
+For $m$ observations, the design matrix $\mathbf{X}$ has one row per observation and one column per feature, including the constant column when the intercept is represented explicitly. The predictions for all observations are
 
 $$
-\sigma(z)=\frac{1}{1+\exp(-z)}.
+\widehat{\mathbf{y}}
+=
+\mathbf{X}\boldsymbol{\theta}.
 $$
 
-It transforms any real-valued score into a number between $0$ and $1$, allowing the output to be interpreted as a probability.
+The **residual** for observation $i$ is the difference between its observed and predicted target:
+
+$$
+e^{(i)}=y^{(i)}-\widehat{y}^{(i)}.
+$$
+
+Linear Regression estimates parameters by minimizing the Mean Squared Error:
+
+$$
+J(\boldsymbol{\theta})
+=
+\operatorname{MSE}(\boldsymbol{\theta})
+=
+\frac{1}{m}
+\sum_{i=1}^{m}
+\left(
+\boldsymbol{\theta}^{\mathsf T}\mathbf{x}^{(i)}-y^{(i)}
+\right)^2.
+$$
+
+Chapter 2 used RMSE as an evaluation metric. Since the square root is strictly increasing on nonnegative values, MSE and RMSE have the same minimizing parameters. MSE is more convenient for differentiation; RMSE is easier to interpret in target units.
+
+### A Synthetic Example
+
+The following observations are generated from $y=4+3x+\varepsilon$, where $\varepsilon$ is random noise. The generating parameters are known here only because this is a simulation.
 
 ```{python}
-#| label: fig-logistic-function
-#| fig-cap: "The logistic, or sigmoid, function."
-#| fig-align: center
-#| fig-width: 6
+#| label: chapter04-linear-data
+
+n_linear = 120
+X_linear = 2 * chapter04_rng.random((n_linear, 1))
+y_linear = (
+    4
+    + 3 * X_linear[:, 0]
+    + chapter04_rng.normal(0, 1, n_linear)
+)
+
+X_linear_train, X_linear_test, y_linear_train, y_linear_test = (
+    train_test_split(
+        X_linear,
+        y_linear,
+        test_size=0.20,
+        random_state=CHAPTER04_SEED,
+    )
+)
+```
+
+The test subset is reserved now and will not be used to choose optimization or model-complexity settings.
+
+## Closed-Form Least Squares
+
+When $\mathbf{X}^{\mathsf T}\mathbf{X}$ is invertible, the familiar Normal Equation is
+
+$$
+\widehat{\boldsymbol{\theta}}
+=
+\left(\mathbf{X}^{\mathsf T}\mathbf{X}\right)^{-1}
+\mathbf{X}^{\mathsf T}\mathbf{y}.
+$$
+
+Explicitly computing this inverse is unnecessary and can be numerically unstable. Collinear predictors can also make the matrix singular. A more general expression uses the Moore-Penrose pseudoinverse:
+
+$$
+\widehat{\boldsymbol{\theta}}
+=
+\mathbf{X}^{+}\mathbf{y}.
+$$
+
+Numerical least-squares routines use matrix factorizations such as Singular Value Decomposition (SVD). `np.linalg.lstsq()` and Scikit-Learn's `LinearRegression` therefore avoid explicitly inverting $\mathbf{X}^{\mathsf T}\mathbf{X}$.
+
+```{python}
+#| label: chapter04-closed-form-linear-regression
+
+X_linear_train_bias = np.c_[
+    np.ones(len(X_linear_train)),
+    X_linear_train,
+]
+
+theta_lstsq, _, _, _ = np.linalg.lstsq(
+    X_linear_train_bias,
+    y_linear_train,
+    rcond=None,
+)
+
+linear_regression = LinearRegression()
+linear_regression.fit(X_linear_train, y_linear_train)
+theta_sklearn = np.r_[
+    linear_regression.intercept_,
+    linear_regression.coef_,
+]
+
+pd.DataFrame(
+    {
+        "Generating value": [4.0, 3.0],
+        "Least squares": theta_lstsq,
+        "LinearRegression": theta_sklearn,
+    },
+    index=["Intercept", "Slope"],
+).round(3)
+```
+
+The estimates need not equal 4 and 3 exactly because the sample contains noise. The two numerical implementations should, however, agree closely.
+
+```{python}
+#| label: fig-linear-regression-fit
+#| fig-cap: "The fitted line approximates the generating relationship but does not pass through every noisy observation."
+#| fig-width: 8
 #| fig-height: 5
-#| echo: false
-#| warning: false
+#| code-fold: true
+#| code-summary: "Show code"
 
-import numpy as np
-import matplotlib.pyplot as plt
+X_linear_grid = np.linspace(0, 2, 200).reshape(-1, 1)
 
-z = np.linspace(-8, 8, 500)
-sigma = 1 / (1 + np.exp(-z))
-
-plt.figure(figsize=(8, 5))
-
-plt.plot(
-    z,
-    sigma,
-    color="#0585d5",
-    linewidth=3,
-    label=r"$\sigma(z)=\frac{1}{1+e^{-z}}$"
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.scatter(
+    X_linear_train[:, 0],
+    y_linear_train,
+    alpha=0.6,
+    label="Training observations",
 )
-
-plt.axhline(
-    0.5,
-    color="gray",
-    linestyle="--",
-    linewidth=1
+ax.plot(
+    X_linear_grid[:, 0],
+    4 + 3 * X_linear_grid[:, 0],
+    "k--",
+    linewidth=2,
+    label="Generating function",
 )
-
-plt.axvline(
-    0,
-    color="gray",
-    linestyle="--",
-    linewidth=1
+ax.plot(
+    X_linear_grid[:, 0],
+    linear_regression.predict(X_linear_grid),
+    linewidth=2,
+    label="Estimated function",
 )
-
-plt.scatter(
-    0,
-    0.5,
-    color="red",
-    s=60,
-    zorder=5
-)
-
-plt.annotate(
-    r"$\sigma(0)=0.5$",
-    xy=(0, 0.5),
-    xytext=(1.2, 0.62),
-    arrowprops=dict(arrowstyle="->"),
-    fontsize=11
-)
-
-plt.fill_between(
-    z,
-    sigma,
-    1,
-    alpha=0.15,
-    color="green",
-    label="Positive-class region"
-)
-
-plt.fill_between(
-    z,
-    0,
-    sigma,
-    alpha=0.15,
-    color="orange",
-    label="Negative-class region"
-)
-
-plt.xlabel(r"Linear score $\mathbf{x}^{T}\boldsymbol{\theta}$")
-plt.ylabel(r"Probability $\sigma(\mathbf{x}^{T}\boldsymbol{\theta})$")
-
-plt.xlim(-8, 8)
-plt.ylim(0, 1.05)
-
-plt.grid(alpha=0.3)
-plt.legend(frameon=False)
-plt.tight_layout()
-
+ax.set_xlabel("$x_1$")
+ax.set_ylabel("$y$")
+ax.legend()
 plt.show()
 ```
 
-Once the model estimates the probability
+Closed-form solvers are effective for moderate numbers of predictors. Their cost grows quickly as the number of features increases, while iterative methods can be preferable for very large or sparse problems.
+
+## Gradient Descent
+
+Gradient Descent minimizes a differentiable objective through repeated updates. The gradient $\nabla_{\boldsymbol{\theta}}J$ points in the direction of greatest local increase, so the parameters move in the opposite direction:
 
 $$
-\hat{p}=h_{\boldsymbol{\theta}}(\mathbf{x})
-$$
-
-that an instance belongs to the positive class, it converts that probability into a class prediction using a threshold:
-
-$$
-\hat{y}
+\boldsymbol{\theta}^{(t+1)}
 =
-\begin{cases}
-0, & \text{if } \hat{p}<0.5,\\
-1, & \text{if } \hat{p}\geq 0.5.
-\end{cases}
+\boldsymbol{\theta}^{(t)}
+-
+\eta
+\nabla_{\boldsymbol{\theta}}J
+\left(\boldsymbol{\theta}^{(t)}\right),
 $$
 
-The value $0.5$ is the default classification threshold, although a different threshold may be selected depending on the objectives and consequences of the classification problem.
+where $\eta>0$ is the **learning rate**.
 
-### Training Logistic Regression
-
-Training Logistic Regression consists of finding the parameter vector $\boldsymbol{\theta}$ that produces appropriate probabilities for the observed classes.
-
-The objective is:
-
-- For positive instances, where $y=1$, the predicted probability $\hat{p}$ should be close to $1$.
-- For negative instances, where $y=0$, the predicted probability $\hat{p}$ should be close to $0$.
-
-To achieve this objective, Logistic Regression minimizes a cost function known as **log loss** or **binary cross-entropy**.
-
-**Cost Function for a Single Training Instance**
-
-For a single observation, the cost is
+For the Linear Regression MSE,
 
 $$
-c(\boldsymbol{\theta})
+\nabla_{\boldsymbol{\theta}}J(\boldsymbol{\theta})
 =
-\begin{cases}
--\log(\hat{p}), & \text{if } y=1,\\
--\log(1-\hat{p}), & \text{if } y=0.
-\end{cases}
+\frac{2}{m}
+\mathbf{X}^{\mathsf T}
+\left(
+\mathbf{X}\boldsymbol{\theta}-\mathbf{y}
+\right).
 $$
 
-This definition has an intuitive interpretation:
+The MSE is convex. It has no suboptimal local minima, although rank-deficient data can produce multiple equivalent minimizers. A learning rate that is too small converges slowly; one that is too large can overshoot and diverge.
 
-- Correct and confident predictions produce a cost close to $0$.
-- Incorrect predictions receive a larger penalty.
-- Incorrect predictions made with high confidence receive an especially large penalty.
+### Batch Gradient Descent
 
-**Why Use the Logarithm?**
+**Batch Gradient Descent** computes each gradient from all training observations.
 
-The logarithmic function offers two important advantages:
+```{python}
+#| label: chapter04-batch-gradient-descent
 
-- It strongly penalizes confident errors.
-- It contributes to a convex objective function that can be optimized efficiently using gradient-based methods.
+def batch_gradient_descent(X, y, learning_rate, n_epochs):
+    theta = np.zeros(X.shape[1])
+    costs = []
 
-**Cost Function for the Entire Training Set**
+    for _ in range(n_epochs):
+        residuals = X @ theta - y
+        gradient = 2 / len(X) * X.T @ residuals
+        theta -= learning_rate * gradient
+        costs.append(np.mean(np.square(X @ theta - y)))
 
-For a dataset containing $m$ training instances, the average cost is
+    return theta, np.array(costs)
+
+
+theta_batch, batch_costs = batch_gradient_descent(
+    X_linear_train_bias,
+    y_linear_train,
+    learning_rate=0.1,
+    n_epochs=200,
+)
+
+pd.DataFrame(
+    {
+        "Least squares": theta_lstsq,
+        "Batch Gradient Descent": theta_batch,
+    },
+    index=["Intercept", "Slope"],
+).round(3)
+```
+
+### Learning Rate
+
+The next experiment keeps the data and initial parameters fixed and varies only the learning rate. The deliberately large value is stopped if the cost becomes nonfinite or exceeds a safe plotting limit.
+
+```{python}
+#| label: chapter04-learning-rate-experiment
+
+learning_rate_histories = {}
+
+for learning_rate in [0.01, 0.1, 0.5]:
+    theta = np.zeros(X_linear_train_bias.shape[1])
+    theta_history = [theta.copy()]
+    cost_history = []
+
+    for _ in range(80):
+        residuals = X_linear_train_bias @ theta - y_linear_train
+        gradient = (
+            2 / len(X_linear_train_bias)
+            * X_linear_train_bias.T
+            @ residuals
+        )
+        theta -= learning_rate * gradient
+        theta_history.append(theta.copy())
+        cost = np.mean(
+            np.square(X_linear_train_bias @ theta - y_linear_train)
+        )
+        cost_history.append(cost)
+
+        if not np.isfinite(cost) or cost > 1_000:
+            break
+
+    learning_rate_histories[learning_rate] = {
+        "theta": np.asarray(theta_history),
+        "cost": np.asarray(cost_history),
+    }
+```
+
+The next figure returns to prediction space. Every panel begins with the same horizontal line from $\boldsymbol{\theta}^{(0)}=(0,0)$; darker lines represent later updates, and the dashed line is the least-squares solution. Lines that leave the visible range in the large-rate panel indicate overshooting rather than missing values.
+
+```{python}
+#| label: fig-gradient-descent-fit-evolution
+#| fig-cap: "Successive fitted lines show how a small, suitable, or excessive learning rate changes the parameter updates."
+#| fig-width: 12
+#| fig-height: 4
+#| code-fold: true
+#| code-summary: "Show code"
+
+selected_updates = [0, 1, 2, 5, 10, 20]
+line_colors = plt.cm.Blues(np.linspace(0.25, 0.95, len(selected_updates)))
+fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True, sharey=True)
+
+for ax, (learning_rate, results) in zip(
+    axes,
+    learning_rate_histories.items(),
+):
+    theta_history = results["theta"]
+    available_updates = [
+        update
+        for update in selected_updates
+        if update < len(theta_history)
+    ]
+
+    for color_index, update in enumerate(available_updates):
+        theta = theta_history[update]
+        line_prediction = theta[0] + theta[1] * X_linear_grid[:, 0]
+        ax.plot(
+            X_linear_grid[:, 0],
+            line_prediction,
+            color=line_colors[color_index],
+            linewidth=1.6,
+            alpha=0.9,
+        )
+
+    ax.plot(
+        X_linear_grid[:, 0],
+        theta_lstsq[0] + theta_lstsq[1] * X_linear_grid[:, 0],
+        "k--",
+        linewidth=2,
+        label="Least-squares solution",
+    )
+    ax.scatter(
+        X_linear_train[:, 0],
+        y_linear_train,
+        s=10,
+        alpha=0.35,
+        color="#6C757D",
+    )
+    ax.set_title(fr"$\eta={learning_rate}$")
+    ax.set_xlabel("$x_1$")
+    ax.set_ylim(-2, 13)
+
+axes[0].set_ylabel("Predicted $y$")
+axes[-1].legend(loc="lower right")
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+#| label: fig-gradient-descent-learning-rates
+#| fig-cap: "Learning rate controls whether Batch Gradient Descent converges slowly, efficiently, or unstably."
+#| fig-width: 9
+#| fig-height: 5
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig, ax = plt.subplots(figsize=(9, 5))
+for learning_rate, results in learning_rate_histories.items():
+    cost_history = results["cost"]
+    ax.plot(
+        np.arange(1, len(cost_history) + 1),
+        cost_history,
+        linewidth=2,
+        label=fr"$\eta={learning_rate}$",
+    )
+
+ax.set_xlabel("Epoch")
+ax.set_ylabel("Training MSE")
+ax.set_yscale("log")
+ax.legend()
+plt.show()
+```
+
+Feature scaling matters because differently scaled predictors stretch the cost surface. A single learning rate then moves too slowly in some parameter directions or too aggressively in others. This optimization geometry explains the pipeline convention used with SGD in Chapters 2 and 3.
+
+### Stochastic and Mini-Batch Gradient Descent
+
+The three common variants differ in how many observations estimate each update:
+
+| Method | Observations per update | Main tradeoff |
+|:---|:---|:---|
+| Batch | Complete training set | Stable gradients, expensive updates |
+| Stochastic | One observation | Cheap noisy updates, supports online learning |
+| Mini-batch | Small group | Efficient matrix operations with moderate noise |
+
+An **epoch** is one pass through the training observations. SGD commonly shuffles observations each epoch, and a learning schedule reduces the learning rate as training progresses. Scikit-Learn exposes these choices through `SGDRegressor`.
+
+The two-parameter linear example also makes optimizer behavior visible directly. The following implementations start from the same parameters. Mini-batch and SGD shuffle the observations once per epoch and visit each observation exactly once; only the number of observations contributing to each update differs.
+
+```{python}
+#| label: chapter04-optimizer-trajectories
+
+def mini_batch_trajectory(X, y, batch_size, n_epochs, learning_rate, seed):
+    rng = np.random.default_rng(seed)
+    theta = np.zeros(X.shape[1])
+    trajectory = [theta.copy()]
+
+    for _ in range(n_epochs):
+        shuffled_indices = rng.permutation(len(X))
+        for start in range(0, len(X), batch_size):
+            batch_indices = shuffled_indices[start:start + batch_size]
+            X_batch = X[batch_indices]
+            y_batch = y[batch_indices]
+            gradient = (
+                2 / len(X_batch)
+                * X_batch.T
+                @ (X_batch @ theta - y_batch)
+            )
+            theta -= learning_rate * gradient
+            trajectory.append(theta.copy())
+
+    return np.asarray(trajectory)
+
+
+def stochastic_trajectory(X, y, n_epochs, initial_rate, seed):
+    rng = np.random.default_rng(seed)
+    theta = np.zeros(X.shape[1])
+    trajectory = [theta.copy()]
+    update = 0
+
+    for _ in range(n_epochs):
+        for index in rng.permutation(len(X)):
+            X_one = X[index:index + 1]
+            y_one = y[index:index + 1]
+            gradient = 2 * X_one.T @ (X_one @ theta - y_one)
+            learning_rate = initial_rate / (1 + update / 100)
+            theta -= learning_rate * gradient
+            trajectory.append(theta.copy())
+            update += 1
+
+    return np.asarray(trajectory)
+
+
+batch_trajectory = learning_rate_histories[0.1]["theta"][:31]
+mini_batch_path = mini_batch_trajectory(
+    X_linear_train_bias,
+    y_linear_train,
+    batch_size=16,
+    n_epochs=12,
+    learning_rate=0.05,
+    seed=CHAPTER04_SEED,
+)
+stochastic_path = stochastic_trajectory(
+    X_linear_train_bias,
+    y_linear_train,
+    n_epochs=8,
+    initial_rate=0.03,
+    seed=CHAPTER04_SEED,
+)
+```
+
+```{python}
+#| label: fig-gradient-descent-trajectories
+#| fig-cap: "Batch, mini-batch, and stochastic updates follow progressively noisier paths through the same MSE surface."
+#| fig-width: 12
+#| fig-height: 4
+#| code-fold: true
+#| code-summary: "Show code"
+
+theta_0_values = np.linspace(-1, 7, 180)
+theta_1_values = np.linspace(-1, 7, 180)
+theta_0_grid, theta_1_grid = np.meshgrid(theta_0_values, theta_1_values)
+parameter_grid = np.c_[theta_0_grid.ravel(), theta_1_grid.ravel()]
+grid_predictions = X_linear_train_bias @ parameter_grid.T
+cost_surface = np.mean(
+    np.square(grid_predictions - y_linear_train[:, np.newaxis]),
+    axis=0,
+).reshape(theta_0_grid.shape)
+
+optimizer_paths = {
+    "Batch": batch_trajectory,
+    "Mini-batch (16)": mini_batch_path[::2],
+    "Stochastic": stochastic_path[::16],
+}
+
+fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True, sharey=True)
+contour_levels = np.geomspace(1, 80, 16)
+
+for ax, (optimizer_name, path) in zip(axes, optimizer_paths.items()):
+    ax.contour(
+        theta_0_grid,
+        theta_1_grid,
+        cost_surface,
+        levels=contour_levels,
+        cmap="Greys",
+        linewidths=0.8,
+    )
+    ax.plot(
+        path[:, 0],
+        path[:, 1],
+        "o-",
+        markersize=2.5,
+        linewidth=1.2,
+        alpha=0.85,
+    )
+    ax.scatter(
+        theta_lstsq[0],
+        theta_lstsq[1],
+        marker="*",
+        s=150,
+        color="#C0392B",
+        edgecolor="white",
+        label="Least-squares minimum",
+        zorder=5,
+    )
+    ax.set_title(optimizer_name)
+    ax.set_xlabel(r"Intercept $\theta_0$")
+    ax.set_xlim(-1, 7)
+    ax.set_ylim(-1, 7)
+
+axes[0].set_ylabel(r"Slope $\theta_1$")
+axes[-1].legend(loc="upper right")
+plt.tight_layout()
+plt.show()
+```
+
+Batch updates follow a smooth deterministic path. Mini-batch updates introduce moderate variation, while SGD makes many inexpensive, irregular moves and continues to fluctuate near the minimum. The decreasing SGD schedule progressively reduces those fluctuations.
+
+```{python}
+#| label: chapter04-sgd-regression
+
+sgd_regression = make_pipeline(
+    StandardScaler(),
+    SGDRegressor(
+        loss="squared_error",
+        penalty=None,
+        learning_rate="invscaling",
+        eta0=0.01,
+        max_iter=2_000,
+        tol=1e-6,
+        random_state=CHAPTER04_SEED,
+    ),
+)
+sgd_regression.fit(X_linear_train, y_linear_train)
+
+pd.Series(
+    {
+        "Least-squares test RMSE": root_mean_squared_error(
+            y_linear_test,
+            linear_regression.predict(X_linear_test),
+        ),
+        "SGD test RMSE": root_mean_squared_error(
+            y_linear_test,
+            sgd_regression.predict(X_linear_test),
+        ),
+    }
+).round(3)
+```
+
+This small test comparison confirms the numerical example; it is not a hyperparameter search. No setting is revised after viewing these values.
+
+## Polynomial Regression
+
+A linear estimator can model curved relationships after the predictors are transformed. The following target is quadratic:
+
+$$
+y=0.5x^2+x+2+\varepsilon.
+$$
+
+```{python}
+#| label: chapter04-polynomial-data
+
+n_polynomial = 180
+X_polynomial = 6 * chapter04_rng.random((n_polynomial, 1)) - 3
+y_polynomial = (
+    0.5 * X_polynomial[:, 0] ** 2
+    + X_polynomial[:, 0]
+    + 2
+    + chapter04_rng.normal(0, 1, n_polynomial)
+)
+
+(
+    X_poly_development,
+    X_poly_test,
+    y_poly_development,
+    y_poly_test,
+) = train_test_split(
+    X_polynomial,
+    y_polynomial,
+    test_size=0.20,
+    random_state=CHAPTER04_SEED,
+)
+```
+
+`PolynomialFeatures(degree=2, include_bias=False)` creates $x$ and $x^2$. A linear estimator then learns one coefficient for each transformed feature. The prediction is nonlinear in $x$ but remains linear in its learned parameters.
+
+With several original predictors, polynomial expansion also creates interactions such as $x_1x_2$. The number of generated features grows quickly with degree, which increases computation and overfitting risk.
+
+```{python}
+#| label: chapter04-polynomial-models
+
+polynomial_degrees = [1, 2, 10]
+polynomial_models = {
+    degree: make_pipeline(
+        PolynomialFeatures(degree=degree, include_bias=False),
+        StandardScaler(),
+        LinearRegression(),
+    ).fit(X_poly_development, y_poly_development)
+    for degree in polynomial_degrees
+}
+```
+
+```{python}
+#| label: fig-polynomial-complexity
+#| fig-cap: "Polynomial degree changes model flexibility while the final estimator remains linear in its parameters."
+#| fig-width: 11
+#| fig-height: 4
+#| code-fold: true
+#| code-summary: "Show code"
+
+X_poly_grid = np.linspace(-3, 3, 300).reshape(-1, 1)
+fig, axes = plt.subplots(1, 3, figsize=(11, 4), sharex=True, sharey=True)
+
+for ax, degree in zip(axes, polynomial_degrees):
+    ax.scatter(
+        X_poly_development[:, 0],
+        y_poly_development,
+        s=15,
+        alpha=0.45,
+    )
+    ax.plot(
+        X_poly_grid[:, 0],
+        polynomial_models[degree].predict(X_poly_grid),
+        linewidth=2,
+    )
+    ax.set_title(f"Degree {degree}")
+    ax.set_xlabel("$x$")
+
+axes[0].set_ylabel("$y$")
+plt.tight_layout()
+plt.show()
+```
+
+## Model Complexity
+
+Chapter 2 used learning curves to diagnose model behavior as training size increased. Here we ask a complementary question: how do training and validation errors change as polynomial degree increases?
+
+All learned transformations remain inside each pipeline and each cross-validation fold. The test set remains locked.
+
+```{python}
+#| label: chapter04-polynomial-complexity-curve
+
+chapter04_regression_cv = KFold(
+    n_splits=5,
+    shuffle=True,
+    random_state=CHAPTER04_SEED,
+)
+degree_candidates = np.arange(1, 13)
+complexity_rows = []
+
+for degree in degree_candidates:
+    polynomial_pipeline = make_pipeline(
+        PolynomialFeatures(degree=degree, include_bias=False),
+        StandardScaler(),
+        LinearRegression(),
+    )
+    scores = cross_validate(
+        polynomial_pipeline,
+        X_poly_development,
+        y_poly_development,
+        scoring="neg_root_mean_squared_error",
+        cv=chapter04_regression_cv,
+        return_train_score=True,
+    )
+    complexity_rows.append(
+        {
+            "Degree": degree,
+            "Training RMSE": -scores["train_score"].mean(),
+            "Validation RMSE": -scores["test_score"].mean(),
+            "Validation SD": scores["test_score"].std(),
+        }
+    )
+
+polynomial_complexity = pd.DataFrame(complexity_rows)
+selected_polynomial_degree = int(
+    polynomial_complexity.loc[
+        polynomial_complexity["Validation RMSE"].idxmin(),
+        "Degree",
+    ]
+)
+polynomial_complexity.round(3)
+```
+
+```{python}
+#| label: fig-polynomial-complexity-curve
+#| fig-cap: "Training and cross-validation RMSE reveal how polynomial complexity affects generalization."
+#| fig-width: 8
+#| fig-height: 5
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.plot(
+    polynomial_complexity["Degree"],
+    polynomial_complexity["Training RMSE"],
+    marker="o",
+    label="Training RMSE",
+)
+ax.plot(
+    polynomial_complexity["Degree"],
+    polynomial_complexity["Validation RMSE"],
+    marker="s",
+    label="Validation RMSE",
+)
+ax.fill_between(
+    polynomial_complexity["Degree"],
+    polynomial_complexity["Validation RMSE"]
+    - polynomial_complexity["Validation SD"],
+    polynomial_complexity["Validation RMSE"]
+    + polynomial_complexity["Validation SD"],
+    alpha=0.15,
+)
+ax.axvline(
+    selected_polynomial_degree,
+    color="black",
+    linestyle="--",
+    label=f"Selected degree = {selected_polynomial_degree}",
+)
+ax.set_xlabel("Polynomial degree")
+ax.set_ylabel("RMSE (lower is better)")
+ax.set_xticks(degree_candidates)
+ax.legend()
+plt.show()
+```
+
+Low degree can underfit because both errors remain high. At high degree, training error can continue decreasing while validation error increases, indicating overfitting. Degree is selected by validation RMSE, not by training fit or the test set.
+
+## Regularized Linear Models
+
+Regularization adds a penalty to the training objective. Evaluation still uses unpenalized predictive error: a model is not rewarded merely for having small coefficients.
+
+Except for the intercept, Ridge penalizes squared coefficients:
+
+$$
+J_{\text{Ridge}}(\boldsymbol{\theta})
+=
+\operatorname{MSE}(\boldsymbol{\theta})
++
+\alpha
+\sum_{j=1}^{n}\theta_j^2.
+$$
+
+Lasso uses absolute values:
+
+$$
+J_{\text{Lasso}}(\boldsymbol{\theta})
+=
+\operatorname{MSE}(\boldsymbol{\theta})
++
+\alpha
+\sum_{j=1}^{n}|\theta_j|.
+$$
+
+Elastic Net combines both penalties. In Scikit-Learn, `l1_ratio=1` is Lasso-like and `l1_ratio=0` is Ridge-like:
+
+$$
+J_{\text{Elastic Net}}
+=
+\operatorname{MSE}
++
+\alpha
+\left[
+r\sum_{j=1}^{n}|\theta_j|
++
+\frac{1-r}{2}\sum_{j=1}^{n}\theta_j^2
+\right].
+$$
+
+Scaling is essential because penalties act directly on coefficient magnitudes. A larger $\alpha$ means stronger regularization for these regressors.
+
+```{python}
+#| label: chapter04-regularization-data
+
+X_regularization, y_regularization, _ = make_regression(
+    n_samples=220,
+    n_features=8,
+    n_informative=4,
+    noise=18,
+    coef=True,
+    random_state=CHAPTER04_SEED,
+)
+
+regularization_alphas = np.logspace(-3, 1.5, 24)
+regularization_paths = {"Ridge": [], "Lasso": [], "Elastic Net": []}
+
+for alpha in regularization_alphas:
+    estimators = {
+        "Ridge": Ridge(alpha=alpha),
+        "Lasso": Lasso(alpha=alpha, max_iter=20_000, tol=1e-5),
+        "Elastic Net": ElasticNet(
+            alpha=alpha,
+            l1_ratio=0.5,
+            max_iter=20_000,
+            tol=1e-5,
+        ),
+    }
+
+    for model_name, estimator in estimators.items():
+        model = make_pipeline(StandardScaler(), estimator)
+        model.fit(X_regularization, y_regularization)
+        regularization_paths[model_name].append(
+            model[-1].coef_.copy()
+        )
+
+regularization_paths = {
+    name: np.asarray(path)
+    for name, path in regularization_paths.items()
+}
+```
+
+```{python}
+#| label: fig-regularization-paths
+#| fig-cap: "Ridge shrinks coefficients continuously, while Lasso and Elastic Net can set coefficients exactly to zero."
+#| fig-width: 12
+#| fig-height: 4
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True, sharey=True)
+
+for ax, (model_name, coefficient_path) in zip(
+    axes,
+    regularization_paths.items(),
+):
+    ax.plot(regularization_alphas, coefficient_path)
+    ax.set_xscale("log")
+    ax.set_title(model_name)
+    ax.set_xlabel(r"Regularization strength $\alpha$")
+
+axes[0].set_ylabel("Standardized-feature coefficient")
+plt.tight_layout()
+plt.show()
+```
+
+Ridge is often a stable default when many predictors contribute. Lasso can produce a sparse model but may select unpredictably among correlated predictors. Elastic Net retains sparsity while making correlated-predictor behavior less brittle. The appropriate penalty and strength must be selected with validation data.
+
+## Early Stopping
+
+Regularization can also be imposed through the training process. **Early stopping** monitors validation error during iterative optimization and keeps the model from epochs before validation performance begins to degrade.
+
+The following example fits a high-degree polynomial model one epoch at a time. The feature transformer is fitted only on the fitting subset and then applied to validation data, preserving the leakage-safe convention from Chapters 2 and 3.
+
+```{python}
+#| label: chapter04-early-stopping
+
+(
+    X_poly_fit,
+    X_poly_validation,
+    y_poly_fit,
+    y_poly_validation,
+) = train_test_split(
+    X_poly_development,
+    y_poly_development,
+    test_size=0.25,
+    random_state=CHAPTER04_SEED,
+)
+
+early_stopping_preprocessing = make_pipeline(
+    PolynomialFeatures(degree=10, include_bias=False),
+    StandardScaler(),
+)
+X_poly_fit_prepared = early_stopping_preprocessing.fit_transform(X_poly_fit)
+X_poly_validation_prepared = early_stopping_preprocessing.transform(
+    X_poly_validation
+)
+
+iterative_regressor = SGDRegressor(
+    loss="squared_error",
+    penalty=None,
+    learning_rate="constant",
+    eta0=0.001,
+    max_iter=1,
+    tol=None,
+    warm_start=True,
+    random_state=CHAPTER04_SEED,
+)
+
+training_rmse_by_epoch = []
+validation_rmse_by_epoch = []
+best_validation_rmse = np.inf
+best_epoch = None
+best_iterative_regressor = None
+
+for epoch in range(300):
+    iterative_regressor.fit(X_poly_fit_prepared, y_poly_fit)
+    training_rmse = root_mean_squared_error(
+        y_poly_fit,
+        iterative_regressor.predict(X_poly_fit_prepared),
+    )
+    validation_rmse = root_mean_squared_error(
+        y_poly_validation,
+        iterative_regressor.predict(X_poly_validation_prepared),
+    )
+    training_rmse_by_epoch.append(training_rmse)
+    validation_rmse_by_epoch.append(validation_rmse)
+
+    if validation_rmse < best_validation_rmse:
+        best_validation_rmse = validation_rmse
+        best_epoch = epoch
+        best_iterative_regressor = deepcopy(iterative_regressor)
+```
+
+```{python}
+#| label: fig-early-stopping
+#| fig-cap: "Early stopping retains the fitted state from the epoch with the smallest validation RMSE."
+#| fig-width: 8
+#| fig-height: 5
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.plot(training_rmse_by_epoch, label="Training RMSE")
+ax.plot(validation_rmse_by_epoch, label="Validation RMSE")
+ax.axvline(
+    best_epoch,
+    color="black",
+    linestyle="--",
+    label=f"Best epoch = {best_epoch}",
+)
+ax.set_xlabel("Epoch")
+ax.set_ylabel("RMSE")
+ax.legend()
+plt.show()
+```
+
+The validation subset guides the stopping decision and is therefore not an independent test set. `deepcopy()` preserves the fitted coefficients at the best epoch; `clone()` would copy only estimator configuration and would return an unfitted estimator.
+
+## Logistic Regression
+
+Logistic Regression reuses a linear score but changes the output and training objective. It estimates the probability that an observation belongs to a positive class:
+
+$$
+\widehat{p}
+=
+\sigma\!\left(\boldsymbol{\theta}^{\mathsf T}\mathbf{x}\right),
+\qquad
+\sigma(z)=\frac{1}{1+\exp(-z)}.
+$$
+
+The sigmoid maps every real-valued score to $(0,1)$. A default threshold of $0.5$ predicts the positive class when $\widehat p\geq0.5$. Chapter 3 showed why an operational threshold must instead reflect error costs and be selected without consulting the test set.
+
+```{python}
+#| label: fig-logistic-function
+#| fig-cap: "The logistic function transforms a linear score into a value between zero and one."
+#| fig-width: 7
+#| fig-height: 4.5
+#| echo: false
+
+z = np.linspace(-8, 8, 500)
+sigmoid_values = 1 / (1 + np.exp(-z))
+
+fig, ax = plt.subplots(figsize=(7, 4.5))
+ax.plot(z, sigmoid_values, linewidth=3)
+ax.axhline(0.5, color="gray", linestyle="--")
+ax.axvline(0, color="gray", linestyle="--")
+ax.scatter(0, 0.5, color="red", zorder=5)
+ax.set_xlabel(r"Linear score $\boldsymbol{\theta}^{T}\mathbf{x}$")
+ax.set_ylabel("Estimated positive-class probability")
+ax.set_ylim(0, 1)
+plt.show()
+```
+
+### Log Loss
+
+For one binary observation, confident correct predictions should have low cost and confident incorrect predictions should have high cost. The average **log loss** is
 
 $$
 J(\boldsymbol{\theta})
@@ -189,503 +1041,191 @@ J(\boldsymbol{\theta})
 -\frac{1}{m}
 \sum_{i=1}^{m}
 \left[
-y^{(i)}
-\log\!\left(\hat{p}^{(i)}\right)
+y^{(i)}\log\!\left(\widehat p^{(i)}\right)
 +
 \left(1-y^{(i)}\right)
-\log\!\left(1-\hat{p}^{(i)}\right)
+\log\!\left(1-\widehat p^{(i)}\right)
 \right].
 $$
 
-Training therefore consists of solving the optimization problem
+Its gradient is
 
 $$
-\boxed{
-\min_{\boldsymbol{\theta}}
-J(\boldsymbol{\theta})
-}.
-$$
-
-The Logistic Regression cost function is convex. Consequently, gradient-based optimization does not become trapped in suboptimal local minima. Under appropriate optimization conditions, the algorithm converges toward a global minimizer.
-
-The minimizer is not necessarily unique in every possible dataset—for example, redundant or perfectly collinear predictors may produce equivalent parameterizations—but the convexity of the objective remains an important computational advantage.
-
-**Gradient of the Cost Function**
-
-The partial derivative of the cost function with respect to parameter $\theta_j$ is
-
-$$
-\frac{\partial J(\boldsymbol{\theta})}
-{\partial\theta_j}
+\nabla_{\boldsymbol{\theta}}J(\boldsymbol{\theta})
 =
 \frac{1}{m}
 \sum_{i=1}^{m}
-\left[
-\sigma\!\left(
-\boldsymbol{\theta}^{T}\mathbf{x}^{(i)}
+\left(
+\widehat p^{(i)}-y^{(i)}
 \right)
--
-y^{(i)}
-\right]
-x_j^{(i)}.
+\mathbf{x}^{(i)}.
 $$
 
-For each training instance, the optimization algorithm:
+This objective is convex, although redundant predictors can prevent a unique parameterization. Solvers, scaling, regularization, and stopping criteria determine how the numerical optimum is reached. Scikit-Learn regularizes Logistic Regression by default; its `C` parameter is the inverse of regularization strength, so smaller `C` means stronger regularization.
 
-1. Computes the predicted probability.
-2. Calculates the difference between the prediction and the target.
-3. Multiplies this difference by the corresponding feature value.
-4. Averages the result across the training instances.
+## Binary Decision Boundaries
 
-The resulting gradient indicates how the parameters should change to reduce the cost.
-
-Batch Gradient Descent uses all training observations at each optimization step. Stochastic Gradient Descent uses one observation at a time, while Mini-batch Gradient Descent uses a small group of observations.
-
-::: {.callout-tip collapse="false"}
-### Key Takeaways
-
-- Logistic Regression estimates class probabilities before producing class labels.
-- The logistic function maps a linear score to the interval $(0,1)$.
-- Log loss strongly penalizes confident incorrect predictions.
-- The cost function is convex, so optimization is not affected by suboptimal local minima.
-- Gradient-based algorithms can be used to estimate the model parameters efficiently.
-:::
-
-### Decision Boundaries
-
-The Iris dataset provides a simple example of Logistic Regression. It contains sepal and petal measurements for 150 flowers belonging to three species:
-
-- *Iris setosa*
-- *Iris versicolor*
-- *Iris virginica*
-
-::: {.concept-figure}
-![Flowers from the three Iris species.](../images/chapter04/imagen15.png){#fig-iris-flowers fig-align="center" width="70%" }
-:::
-
-The following block imports the required tools and loads the dataset as a pandas DataFrame. Loading it with `as_frame=True` allows the predictors to be selected using their descriptive column names.
+The Iris dataset contains four measurements and three mutually exclusive species. The first example asks whether a flower is *Iris virginica* using petal width only. It is an explanatory geometry example, not a model-selection exercise.
 
 ```{python}
-#| label: lst-load-iris
+#| label: chapter04-load-iris
 
-from sklearn import datasets
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
+iris = load_iris(as_frame=True)
+X_iris_binary = iris.data[["petal width (cm)"]].to_numpy()
+y_iris_binary = (iris.target == 2).to_numpy()
 
-iris = datasets.load_iris(as_frame=True)
-
-list(iris.keys())
+binary_logistic = LogisticRegression(random_state=CHAPTER04_SEED)
+binary_logistic.fit(X_iris_binary, y_iris_binary)
 ```
-
-The `load_iris()` function returns a dictionary-like `Bunch` object containing:
-
-- the predictor matrix;
-- the target variable;
-- feature names;
-- class names;
-- metadata describing the dataset.
-
-#### Binary Classification Using One Feature
-
-Suppose the objective is to identify *Iris virginica* flowers using only petal width.
-
-The original three-class target is transformed into a binary target:
-
-- `False`: the flower is not *Iris virginica*;
-- `True`: the flower is *Iris virginica*.
-
-The data is divided into training and test sets before fitting the model. The training set is used to estimate the parameters, while the test set is kept separate for later model evaluation.
-
-Stratification preserves approximately the same class proportions in both subsets.
-
-```{python}
-#| label: lst-prepare-binary-iris
-
-X = iris.data[["petal width (cm)"]].values
-y = iris.target == 2
-
-X_train, X_test, y_train, y_test = train_test_split(
-    X,
-    y,
-    test_size=0.25,
-    random_state=42,
-    stratify=y
-)
-```
-
-The Logistic Regression model is then fitted exclusively on the training data.
-
-```{python}
-#| label: lst-train-binary-logistic-regression
-
-log_reg = LogisticRegression(random_state=42)
-log_reg.fit(X_train, y_train)
-```
-
-Once trained, the model can estimate class probabilities for any possible petal width.
-
-The following code creates a sequence of petal-width values, obtains the corresponding probabilities, and identifies the point at which the probability of *Iris virginica* reaches $0.5$.
 
 ```{python}
 #| label: fig-iris-logistic-regression
-#| fig-cap: "Estimated probabilities and decision boundary for Iris virginica classification."
-#| fig-align: center
-#| fig-width: 7
-#| fig-height: 3.5
-#| out-width: 100%
+#| fig-cap: "Estimated class probabilities and the default 0.5 decision boundary for Iris virginica."
+#| fig-width: 8
+#| fig-height: 4.5
 #| code-fold: true
 #| code-summary: "Show code"
 
-X_new = np.linspace(0, 3, 1000).reshape(-1, 1)
-
-y_proba = log_reg.predict_proba(X_new)
-
-decision_boundary = X_new[
-    y_proba[:, 1] >= 0.5
+X_binary_grid = np.linspace(0, 3, 600).reshape(-1, 1)
+binary_probabilities = binary_logistic.predict_proba(X_binary_grid)
+binary_boundary = X_binary_grid[
+    binary_probabilities[:, 1] >= 0.5
 ][0, 0]
 
-plt.figure(figsize=(7, 3.5))
-
-plt.plot(
-    X_new,
-    y_proba[:, 0],
-    "b--",
-    linewidth=2,
-    label="Not Iris virginica"
+fig, ax = plt.subplots(figsize=(8, 4.5))
+ax.plot(
+    X_binary_grid[:, 0],
+    binary_probabilities[:, 0],
+    "--",
+    label="Not Iris virginica",
 )
-
-plt.plot(
-    X_new,
-    y_proba[:, 1],
-    "g-",
-    linewidth=2,
-    label="Iris virginica"
+ax.plot(
+    X_binary_grid[:, 0],
+    binary_probabilities[:, 1],
+    label="Iris virginica",
 )
-
-plt.plot(
-    [decision_boundary, decision_boundary],
-    [0, 1],
-    "k:",
-    linewidth=2,
-    label="Decision boundary"
+ax.axvline(
+    binary_boundary,
+    color="black",
+    linestyle=":",
+    label="0.5 boundary",
 )
-
-plt.arrow(
-    x=decision_boundary,
-    y=0.08,
-    dx=-0.3,
-    dy=0,
-    head_width=0.05,
-    head_length=0.1,
-    fc="b",
-    ec="b"
+ax.scatter(
+    X_iris_binary[:, 0],
+    y_iris_binary,
+    c=y_iris_binary,
+    cmap="coolwarm",
+    edgecolor="black",
+    s=35,
 )
-
-plt.arrow(
-    x=decision_boundary,
-    y=0.92,
-    dx=0.3,
-    dy=0,
-    head_width=0.05,
-    head_length=0.1,
-    fc="g",
-    ec="g"
-)
-
-plt.plot(
-    X_train[y_train == 0],
-    y_train[y_train == 0],
-    "bs",
-    label="Training: not virginica"
-)
-
-plt.plot(
-    X_train[y_train == 1],
-    y_train[y_train == 1],
-    "g^",
-    label="Training: virginica"
-)
-
-plt.xlabel("Petal width (cm)")
-plt.ylabel("Estimated probability")
-plt.legend(loc="center left")
-plt.axis([0, 3, -0.02, 1.02])
-plt.grid(alpha=0.3)
-plt.tight_layout()
-
+ax.set_xlabel("Petal width (cm)")
+ax.set_ylabel("Estimated probability")
+ax.set_ylim(-0.02, 1.02)
+ax.legend()
 plt.show()
 ```
 
-The two curves represent the estimated probabilities of the two classes. For every observation, these probabilities sum to $1$.
-
-As petal width increases, the estimated probability of *Iris virginica* also increases. The vertical dotted line marks the decision boundary, where both probabilities are approximately $0.5$.
-
-Therefore:
-
-- Petal widths below the boundary are classified as **Not Iris virginica**.
-- Petal widths above the boundary are classified as **Iris virginica**.
-
-The squares and triangles represent the training observations used to estimate the model.
-
-The numerical value of the decision boundary can be inspected directly:
+With petal length and width, the score remains linear in two predictors and the $0.5$ boundary becomes a line. `C=2` below is fixed only to make the geometry visible; it is not claimed to be an evaluated optimum.
 
 ```{python}
-#| label: lst-display-decision-boundary
+#| label: chapter04-fit-two-feature-logistic
 
-decision_boundary
-```
-
-The exact value may vary slightly depending on the training subset. This is expected because the model is fitted using only the observations assigned to the training set.
-
-Once the model has been trained, new flowers can be classified using the `predict()` method.
-
-```{python}
-#| label: lst-logistic-predict
-
-log_reg.predict([[1.7], [1.5]])
-```
-
-The first observation has a petal width of 1.7 cm, while the second has a petal width of 1.5 cm.
-
-Their predictions depend on which side of the learned decision boundary they fall. Instead of assuming a fixed boundary value in the explanation, the predictions should be interpreted relative to the boundary estimated in the preceding block.
-
-The underlying probabilities can be obtained using `predict_proba()`:
-
-```{python}
-#| label: lst-logistic-predict-proba
-
-log_reg.predict_proba([[1.7], [1.5]])
-```
-
-Each row contains the probabilities assigned to the two classes:
-
-- The first column corresponds to **Not Iris virginica**.
-- The second column corresponds to **Iris virginica**.
-
-The `predict()` method returns the class with the highest estimated probability.
-
-#### Logistic Regression Using Two Features
-
-The previous model uses only petal width. Although this simplifies visualization, it ignores potentially useful information contained in other predictors.
-
-The following example uses both petal length and petal width. In a two-dimensional feature space, the decision boundary is no longer a single threshold. Instead, it becomes a line separating two regions of the plane.
-
-A new training-test split is created because the predictor matrix has changed.
-
-```{python}
-#| label: lst-prepare-two-feature-iris
-
-X = iris.data[
+X_iris_two = iris.data[
     ["petal length (cm)", "petal width (cm)"]
-].values
+].to_numpy()
 
-y = iris.target == 2
-
-X_train, X_test, y_train, y_test = train_test_split(
-    X,
-    y,
-    test_size=0.25,
-    random_state=42,
-    stratify=y
+binary_logistic_2d = make_pipeline(
+    StandardScaler(),
+    LogisticRegression(C=2, random_state=CHAPTER04_SEED),
 )
+binary_logistic_2d.fit(X_iris_two, y_iris_binary)
 ```
-
-The model is then fitted using the two predictors.
-
-```{python}
-#| label: lst-train-two-feature-logistic-regression
-
-log_reg_2d = LogisticRegression(
-    C=2,
-    random_state=42
-)
-
-log_reg_2d.fit(X_train, y_train)
-```
-
-The parameter `C` controls the inverse strength of regularization. Larger values of `C` correspond to weaker regularization, while smaller values impose stronger regularization.
 
 ```{python}
 #| label: fig-logistic-regression-two-features
-#| fig-cap: "Decision boundary and estimated probabilities using petal length and petal width."
-#| fig-align: center
-#| fig-width: 7
-#| fig-height: 4
-#| out-width: 100%
+#| fig-cap: "A binary logistic model induces a linear 0.5 boundary in a two-feature space."
+#| fig-width: 8
+#| fig-height: 5
 #| code-fold: true
 #| code-summary: "Show code"
 
 x0, x1 = np.meshgrid(
-    np.linspace(2.9, 7, 500),
-    np.linspace(0.8, 2.7, 200)
+    np.linspace(2.9, 7.0, 300),
+    np.linspace(0.8, 2.7, 180),
 )
+X_iris_grid = np.c_[x0.ravel(), x1.ravel()]
+virginica_probability = binary_logistic_2d.predict_proba(
+    X_iris_grid
+)[:, 1].reshape(x0.shape)
 
-X_new = np.c_[x0.ravel(), x1.ravel()]
-
-y_proba = log_reg_2d.predict_proba(X_new)
-zz = y_proba[:, 1].reshape(x0.shape)
-
-left_right = np.array([2.9, 7])
-
-boundary = -(
-    log_reg_2d.coef_[0, 0] * left_right
-    + log_reg_2d.intercept_[0]
-) / log_reg_2d.coef_[0, 1]
-
-plt.figure(figsize=(7, 4))
-
-plt.plot(
-    X_train[y_train == 0, 0],
-    X_train[y_train == 0, 1],
-    "bs",
-    label="Not Iris virginica"
-)
-
-plt.plot(
-    X_train[y_train == 1, 0],
-    X_train[y_train == 1, 1],
-    "g^",
-    label="Iris virginica"
-)
-
-contour = plt.contour(
+fig, ax = plt.subplots(figsize=(8, 5))
+contour = ax.contourf(
     x0,
     x1,
-    zz,
-    cmap=plt.cm.brg
+    virginica_probability,
+    levels=np.linspace(0, 1, 11),
+    cmap="coolwarm",
+    alpha=0.35,
 )
-
-plt.clabel(
-    contour,
-    inline=True,
-    fontsize=8
+ax.contour(
+    x0,
+    x1,
+    virginica_probability,
+    levels=[0.5],
+    colors="black",
+    linewidths=2,
 )
-
-plt.plot(
-    left_right,
-    boundary,
-    "k--",
-    linewidth=2,
-    label="Decision boundary"
+ax.scatter(
+    X_iris_two[:, 0],
+    X_iris_two[:, 1],
+    c=y_iris_binary,
+    cmap="coolwarm",
+    edgecolor="black",
+    s=35,
 )
-
-plt.text(
-    3.5,
-    1.27,
-    "Not Iris virginica",
-    color="navy",
-    ha="center"
-)
-
-plt.text(
-    6.4,
-    2.3,
-    "Iris virginica",
-    color="darkgreen",
-    ha="center"
-)
-
-plt.xlabel("Petal length (cm)")
-plt.ylabel("Petal width (cm)")
-plt.axis([2.9, 7, 0.8, 2.7])
-plt.grid(alpha=0.3)
-plt.legend()
-plt.tight_layout()
-
+ax.set_xlabel("Petal length (cm)")
+ax.set_ylabel("Petal width (cm)")
+fig.colorbar(contour, ax=ax, label="P(Iris virginica)")
 plt.show()
 ```
 
-As shown in @fig-logistic-regression-two-features, each point represents a training observation.
+## Softmax Regression
 
-The dashed line is the linear decision boundary. It separates the feature space into two regions:
-
-- Flowers on one side are classified as **Not Iris virginica**.
-- Flowers on the other side are classified as **Iris virginica**.
-
-The contour lines represent different estimated probabilities of belonging to the *Iris virginica* class.
-
-Near the decision boundary, the predicted probability is close to $0.5$, which indicates greater uncertainty. As an observation moves farther from the boundary, the model assigns increasingly extreme probabilities to one of the two classes.
-
-### Softmax Regression
-
-Logistic Regression can be generalized to support more than two classes directly. This generalization is known as **Softmax Regression** or **Multinomial Logistic Regression**.
-
-Given an instance $\mathbf{x}$, the model first calculates a score for each class $k$:
+Softmax Regression extends Logistic Regression to $K$ mutually exclusive classes. It computes one linear score per class:
 
 $$
 s_k(\mathbf{x})
 =
-\mathbf{x}^{T}\boldsymbol{\theta}^{(k)}.
+\left(\boldsymbol{\theta}^{(k)}\right)^{\mathsf T}\mathbf{x}.
 $$
 
-Each class has its own parameter vector $\boldsymbol{\theta}^{(k)}$. These class-specific vectors can be stored together in a parameter matrix $\mathbf{\Theta}$.
-
-Once the score for each class has been computed, the Softmax function transforms the scores into class probabilities:
+The scores become probabilities through
 
 $$
-\hat{p}_k
+\widehat p_k
 =
-\sigma\!\left(\mathbf{s}(\mathbf{x})\right)_k
+\frac{\exp(s_k)}{\sum_{j=1}^{K}\exp(s_j)},
+\qquad
+\sum_{k=1}^{K}\widehat p_k=1.
+$$
+
+Implementations evaluate this expression stably by subtracting the largest score before exponentiation. This changes neither the probabilities nor the predicted class but avoids unnecessary overflow.
+
+The predicted class is
+
+$$
+\widehat y
 =
-\frac{
-\exp\!\left(s_k(\mathbf{x})\right)
-}{
-\sum_{j=1}^{K}
-\exp\!\left(s_j(\mathbf{x})\right)
-}.
-$$
-
-In this expression:
-
-- $K$ is the number of classes.
-- $\mathbf{s}(\mathbf{x})$ is the vector containing all class scores.
-- $\hat{p}_k$ is the estimated probability that instance $\mathbf{x}$ belongs to class $k$.
-
-The Softmax probabilities satisfy
-
-$$
-\sum_{k=1}^{K}\hat{p}_k=1.
-$$
-
-The predicted class is the one with the highest estimated probability:
-
-$$
-\hat{y}
+\arg\max_k \widehat p_k
 =
-\arg\max_k
-\hat{p}_k
-=
-\arg\max_k
-s_k(\mathbf{x})
-=
-\arg\max_k
-\left[
-\left(
-\boldsymbol{\theta}^{(k)}
-\right)^T
-\mathbf{x}
-\right].
+\arg\max_k s_k.
 $$
 
-The $\arg\max$ operator returns the value of $k$ that maximizes the corresponding expression. In this case, it returns the class with the highest score and therefore the highest estimated probability.
+Softmax is a multiclass, single-label model. It does not solve multilabel tasks in which several classes may be correct simultaneously.
 
-::: {.callout-tip}
-## Softmax Regression Predicts One Class
+### Categorical Cross-Entropy
 
-Softmax Regression predicts **one class per observation**. It is a multiclass classifier, not a multilabel or multioutput classifier.
-
-It is therefore appropriate when the classes are mutually exclusive, such as different plant species or handwritten digits.
-
-For example, a Softmax model can classify a flower as *Iris setosa*, *Iris versicolor*, or *Iris virginica*, but it cannot assign several of these species to the same flower.
-
-Similarly, it is not directly suitable for a problem in which multiple labels may be correct simultaneously, such as identifying several people present in the same photograph.
-:::
-
-#### Training Softmax Regression
-
-Training Softmax Regression consists of finding a parameter matrix that assigns high probability to the correct class and low probabilities to the remaining classes.
-
-The model minimizes the **categorical cross-entropy** cost function:
+With one-hot targets $y_k^{(i)}$, Softmax Regression minimizes
 
 $$
 J(\mathbf{\Theta})
@@ -693,233 +1233,187 @@ J(\mathbf{\Theta})
 -\frac{1}{m}
 \sum_{i=1}^{m}
 \sum_{k=1}^{K}
-y_k^{(i)}
-\log\!\left(
-\hat{p}_k^{(i)}
-\right).
+y_k^{(i)}\log\!\left(\widehat p_k^{(i)}\right).
 $$
 
-In this equation:
+Only the term for the observed class contributes for each observation. When $K=2$, this reduces to binary cross-entropy.
 
-- $m$ is the number of training instances.
-- $K$ is the number of classes.
-- $y_k^{(i)}=1$ when instance $i$ belongs to class $k$.
-- $y_k^{(i)}=0$ when instance $i$ does not belong to class $k$.
-- $\hat{p}_k^{(i)}$ is the probability assigned by the model to class $k$ for instance $i$.
+## Selecting and Evaluating Softmax Regression
 
-Because the target classes are represented using one-hot encoding, only the logarithm corresponding to the correct class contributes to the cost for each observation.
-
-When there are only two classes, this expression reduces to the binary cross-entropy cost used by binary Logistic Regression.
-
-The gradient with respect to the parameter vector of class $k$ is
-
-$$
-\nabla_{\boldsymbol{\theta}^{(k)}}
-J(\mathbf{\Theta})
-=
-\frac{1}{m}
-\sum_{i=1}^{m}
-\left(
-\hat{p}_k^{(i)}
--
-y_k^{(i)}
-\right)
-\mathbf{x}^{(i)}.
-$$
-
-This gradient indicates how the parameters associated with each class should change to reduce the total cost.
-
-An optimization algorithm computes the gradient for every class and iteratively updates the complete parameter matrix $\mathbf{\Theta}$.
-
-::: {.callout-tip}
-## Why Cross-Entropy?
-
-Cross-entropy penalizes a classifier when it assigns a low probability to the correct class.
-
-The penalty grows rapidly as the probability assigned to the correct class approaches zero. Consequently, the optimization process encourages the model to assign increasingly high probabilities to the observed target classes.
-:::
-
-#### Multiclass Classification of Iris Flowers
-
-The following example trains a Softmax Regression model to classify all three Iris species using petal length and petal width.
-
-As in the binary examples, the observations are divided into training and test sets before fitting the model.
+The geometric examples above used all Iris observations because they were not presented as performance estimates. The final experiment follows the evaluation discipline from Chapter 3: create one stratified split, select `C` only through cross-validation on the training subset, and evaluate the selected pipeline once on test data.
 
 ```{python}
-#| label: lst-prepare-softmax-iris
+#| label: chapter04-softmax-split
 
-X = iris.data[
+X_iris_multiclass = iris.data[
     ["petal length (cm)", "petal width (cm)"]
-].values
+].to_numpy()
+y_iris_multiclass = iris.target.to_numpy()
 
-y = iris.target.values
-
-X_train, X_test, y_train, y_test = train_test_split(
-    X,
-    y,
+(
+    X_iris_train,
+    X_iris_test,
+    y_iris_train,
+    y_iris_test,
+) = train_test_split(
+    X_iris_multiclass,
+    y_iris_multiclass,
     test_size=0.25,
-    random_state=42,
-    stratify=y
+    stratify=y_iris_multiclass,
+    random_state=CHAPTER04_SEED,
+)
+
+chapter04_classification_cv = StratifiedKFold(
+    n_splits=5,
+    shuffle=True,
+    random_state=CHAPTER04_SEED,
 )
 ```
 
-A compatible solver such as `"lbfgs"` can optimize the multinomial Logistic Regression objective directly.
-
-In current Scikit-Learn versions, it is not necessary to specify the deprecated `multi_class="multinomial"` argument when using a compatible solver for a multiclass target.
-
 ```{python}
-#| label: lst-train-softmax-regression
+#| label: chapter04-select-softmax-regularization
 
-softmax_reg = LogisticRegression(
-    solver="lbfgs",
-    C=10,
-    random_state=42
+softmax_search = GridSearchCV(
+    estimator=make_pipeline(
+        StandardScaler(),
+        LogisticRegression(
+            solver="lbfgs",
+            max_iter=2_000,
+            random_state=CHAPTER04_SEED,
+        ),
+    ),
+    param_grid={"logisticregression__C": np.logspace(-2, 2, 9)},
+    scoring="neg_log_loss",
+    cv=chapter04_classification_cv,
+    refit=True,
+    return_train_score=True,
 )
+softmax_search.fit(X_iris_train, y_iris_train)
 
-softmax_reg.fit(X_train, y_train)
+softmax_cv_results = (
+    pd.DataFrame(softmax_search.cv_results_)
+    .assign(
+        mean_training_log_loss=lambda frame: -frame["mean_train_score"],
+        mean_validation_log_loss=lambda frame: -frame["mean_test_score"],
+    )
+    [[
+        "param_logisticregression__C",
+        "mean_training_log_loss",
+        "mean_validation_log_loss",
+        "std_test_score",
+    ]]
+    .sort_values("mean_validation_log_loss")
+)
+softmax_cv_results.head().round(4)
 ```
 
-Unlike binary Logistic Regression, Softmax Regression learns one set of parameters for each class.
-
-The learned intercepts and coefficients can be inspected directly:
+The selected estimator is fixed before the following cell accesses test labels. Test probabilities and predictions are computed once and reused.
 
 ```{python}
-#| label: lst-softmax-parameters
+#| label: chapter04-final-softmax-evaluation
 
-print("Intercepts:")
-print(softmax_reg.intercept_)
+selected_softmax = softmax_search.best_estimator_
+softmax_test_probabilities = selected_softmax.predict_proba(X_iris_test)
+softmax_test_predictions = selected_softmax.predict(X_iris_test)
 
-print("\nCoefficients:")
-print(softmax_reg.coef_)
+softmax_test_results = pd.Series(
+    {
+        "Selected C": softmax_search.best_params_[
+            "logisticregression__C"
+        ],
+        "Test accuracy": accuracy_score(
+            y_iris_test,
+            softmax_test_predictions,
+        ),
+        "Test log loss": log_loss(
+            y_iris_test,
+            softmax_test_probabilities,
+            labels=selected_softmax.classes_,
+        ),
+    },
+    name="Independent test",
+)
+softmax_test_results.round(4)
 ```
 
-The coefficient matrix contains one row per class and one column per predictor.
-
-In this example:
-
-- each row corresponds to one Iris species;
-- the first column corresponds to petal length;
-- the second column corresponds to petal width.
-
-The model can then estimate the probabilities of all three species for a new observation:
-
 ```{python}
-#| label: lst-softmax-predict-proba
-
-softmax_reg.predict_proba([[5.0, 2.0]])
-```
-
-The resulting row contains one probability for each class, following the order stored in
-
-```{python}
-#| label: lst-softmax-classes
-
-softmax_reg.classes_
-```
-
-The final class prediction is the class with the highest estimated probability:
-
-```{python}
-#| label: lst-softmax-predict
-
-print(softmax_reg.predict_proba([[5.0, 2.0]]))
-prediction = softmax_reg.predict([[5.0, 2.0]])
-
-iris.target_names[prediction]
-```
-
-Although `X_test` and `y_test` are not used in this section, they remain isolated from the training process. They can therefore be used later to study model generalization without introducing information from the test data during parameter estimation.
-
-```{python}
-#| label: fig-softmax-decision-regions
-#| fig-cap: "Decision regions and estimated probabilities obtained with Softmax Regression."
-#| fig-align: center
-#| fig-width: 8
-#| fig-height: 4
-#| out-width: 100%
+#| label: fig-softmax-evaluation
+#| fig-cap: "The selected Softmax pipeline is evaluated once with decision regions and an independent test confusion matrix."
+#| fig-width: 12
+#| fig-height: 5
 #| code-fold: true
 #| code-summary: "Show code"
-from matplotlib.colors import ListedColormap
 
-custom_cmap = ListedColormap(
-    ["#fafab0", "#9898ff", "#a0faa0"]
+softmax_cmap = ListedColormap(["#F7DC6F", "#85C1E9", "#82E0AA"])
+softmax_x0, softmax_x1 = np.meshgrid(
+    np.linspace(0.5, 7.0, 300),
+    np.linspace(0.0, 3.0, 180),
+)
+softmax_grid = np.c_[softmax_x0.ravel(), softmax_x1.ravel()]
+softmax_regions = selected_softmax.predict(softmax_grid).reshape(
+    softmax_x0.shape
 )
 
-x0, x1 = np.meshgrid(
-    np.linspace(0, 8, 500),
-    np.linspace(0, 3.5, 200)
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+axes[0].contourf(
+    softmax_x0,
+    softmax_x1,
+    softmax_regions,
+    cmap=softmax_cmap,
+    alpha=0.45,
 )
-
-X_new = np.c_[x0.ravel(), x1.ravel()]
-
-y_proba = softmax_reg.predict_proba(X_new)
-y_predict = softmax_reg.predict(X_new)
-
-zz = y_predict.reshape(x0.shape)
-zz1 = y_proba[:, 1].reshape(x0.shape)
-
-plt.figure(figsize=(8,4))
-
-plt.plot(
-    X_train[y_train == 2,0],
-    X_train[y_train == 2,1],
-    "g^",
-    label="Iris virginica"
+axes[0].scatter(
+    X_iris_train[:, 0],
+    X_iris_train[:, 1],
+    c=y_iris_train,
+    cmap=softmax_cmap,
+    edgecolor="black",
+    s=35,
 )
+axes[0].set_xlabel("Petal length (cm)")
+axes[0].set_ylabel("Petal width (cm)")
+axes[0].set_title("Selected Softmax decision regions")
 
-plt.plot(
-    X_train[y_train == 1,0],
-    X_train[y_train == 1,1],
-    "bs",
-    label="Iris versicolor"
+ConfusionMatrixDisplay.from_predictions(
+    y_iris_test,
+    softmax_test_predictions,
+    labels=selected_softmax.classes_,
+    display_labels=iris.target_names,
+    cmap="Blues",
+    colorbar=False,
+    ax=axes[1],
 )
-
-plt.plot(
-    X_train[y_train == 0,0],
-    X_train[y_train == 0,1],
-    "yo",
-    label="Iris setosa"
-)
-
-plt.contourf(
-    x0,
-    x1,
-    zz,
-    cmap=custom_cmap,
-    alpha=0.35
-)
-
-contour = plt.contour(
-    x0,
-    x1,
-    zz1,
-    cmap="hot"
-)
-
-plt.clabel(
-    contour,
-    inline=True,
-    fontsize=8
-)
-
-plt.xlabel("Petal length (cm)")
-plt.ylabel("Petal width (cm)")
-
-plt.legend(loc="upper left")
-
-plt.axis([0.5,7,0,3.5])
-
-plt.grid(alpha=0.3)
+axes[1].set_title("Independent test confusion matrix")
+axes[1].tick_params(axis="x", rotation=25)
 
 plt.tight_layout()
-
 plt.show()
 ```
 
-Figure @fig-softmax-decision-regions illustrates how Softmax Regression partitions the feature space into three decision regions, one for each Iris species.
+Accuracy evaluates the final class decisions, while log loss evaluates the quality of the probability assigned to the observed class. Neither metric was used after test evaluation to revise `C` or any other setting.
 
-Each background color represents the class predicted by the classifier, while the contour lines indicate the estimated probability of the Iris versicolor class. Every point in the feature space belongs to exactly one decision region, and the predicted class is the one with the highest estimated probability.
+## Chapter Summary
 
-Notice that the decision boundaries are still linear, but together they divide the predictor space into multiple regions corresponding to the three flower species. This is the multiclass extension of the linear decision boundary introduced earlier for binary Logistic Regression.
+- Linear Regression predicts with a weighted sum and estimates parameters by minimizing squared error.
+- Stable least-squares solvers use factorizations or a pseudoinverse rather than explicitly inverting $\mathbf{X}^{\mathsf T}\mathbf{X}$.
+- Gradient Descent depends on learning rate, scaling, update size, and stopping criteria.
+- Polynomial features change input representation while the estimator remains linear in its parameters.
+- Training-validation curves diagnose complexity; the test set does not participate in that diagnosis.
+- Ridge shrinks coefficients with L2 regularization; Lasso uses L1 and can create sparse models; Elastic Net combines both.
+- Early stopping regularizes an iterative model by retaining an earlier fitted state selected on validation data.
+- Logistic Regression maps a linear score through the sigmoid and minimizes binary cross-entropy.
+- Softmax Regression learns one score per mutually exclusive class and minimizes categorical cross-entropy.
+- Classification regularization and thresholds are development choices; final test data must remain independent.
 
-Logistic Regression and Softmax Regression are among the most widely used classification algorithms because they combine a solid probabilistic foundation with efficient optimization. Despite their simplicity, they often provide highly competitive performance and serve as the basis for many more advanced classification methods introduced in later chapters.
+## Exercises
+
+1. Add a predictor that is an exact copy of $x$ to the synthetic linear dataset. Compare `np.linalg.lstsq()` with an explicit Normal Equation inverse and explain the result.
+2. Standardize a two-feature dataset with strongly different scales. Plot Batch Gradient Descent trajectories before and after scaling.
+3. Implement Mini-batch Gradient Descent with shuffled batches and compare its cost history with Batch and Stochastic Gradient Descent.
+4. Extend the polynomial complexity curve to degree 20. Identify where numerical instability or overfitting begins and justify the diagnosis using validation, not test, RMSE.
+5. Use matched cross-validation folds to select Ridge, Lasso, and Elastic Net hyperparameters. Compare validation RMSE and the number of nonzero coefficients.
+6. Add patience to the manual early-stopping loop so fitting ends after several epochs without meaningful validation improvement.
+7. Compare the selected Softmax pipeline with an unscaled pipeline using the same folds. Explain changes in convergence and validation log loss.
+8. Select a binary Iris threshold for a stated precision or recall objective by following the dedicated-validation protocol from Chapter 3.
+9. Create a multiclass target with string labels and verify that `classes_`, `predict_proba()`, and `predict()` preserve the class mapping.
+10. Explain why minimizing log loss can improve probability estimates without guaranteeing that a fixed 0.5 decision threshold is appropriate for deployment.

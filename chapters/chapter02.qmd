@@ -25,6 +25,7 @@ After completing this chapter, you should be able to:
 - identify missing values, skewed distributions, geographic structure, and target limitations;
 - build leakage-safe transformations with `Pipeline` and `ColumnTransformer`;
 - compare baselines and regression models using cross-validation;
+- diagnose underfitting and overfitting with training and validation learning curves;
 - tune preprocessing and model hyperparameters together;
 - diagnose residuals and subgroup errors before final evaluation;
 - evaluate a selected pipeline once on held-out data and quantify uncertainty;
@@ -58,6 +59,7 @@ from sklearn.model_selection import (
     RandomizedSearchCV,
     cross_val_predict,
     cross_validate,
+    learning_curve,
     train_test_split,
 )
 from sklearn.pipeline import make_pipeline
@@ -569,6 +571,114 @@ model_comparison.round(0)
 
 The training and validation columns answer different questions. A decision tree can memorize the training observations, but its validation error exposes poor generalization. The random forest is the strongest candidate, although its training-validation gap indicates remaining overfitting.
 
+### Learning Curves: Underfitting and Overfitting
+
+A single cross-validation table summarizes performance at one training-set size. A **learning curve** adds another dimension by fitting the same model with progressively larger training subsets and plotting its training and validation errors.
+
+The relationship between the two curves supports two common diagnoses:
+
+- **Underfitting:** training and validation errors are both high and close together. The model does not fit even the training patterns sufficiently well, so adding more observations alone may provide little improvement after the curves stabilize.
+- **Overfitting:** training error is much lower than validation error. This persistent **generalization gap** indicates that the model fits training-specific detail that does not transfer reliably to held-out folds.
+
+A small gap alone does not prove underfitting: both errors must also be poor relative to the project objective or to more suitable models. Here, the linear model's validation RMSE is substantially worse than the random forest's, while its training and validation errors are similar. The unrestricted decision tree provides the opposite pattern: nearly zero training error and much larger validation error.
+
+The following curves use only the locked training set. At every point, the complete preprocessing pipeline is refitted inside each cross-validation training fold. The final test set remains untouched.
+
+```{python}
+#| label: housing-learning-curves
+
+learning_curve_models = {
+    "Linear regression": LinearRegression(),
+    "Unrestricted decision tree": DecisionTreeRegressor(
+        random_state=RANDOM_STATE
+    ),
+}
+
+training_fractions = np.linspace(0.3, 1.0, 5)
+learning_curve_results = {}
+
+for model_name, estimator in learning_curve_models.items():
+    model_pipeline = make_pipeline(preprocessing, estimator)
+    train_sizes, train_scores, validation_scores = learning_curve(
+        model_pipeline,
+        housing,
+        housing_labels,
+        train_sizes=training_fractions,
+        cv=3,
+        scoring="neg_root_mean_squared_error",
+        shuffle=True,
+        random_state=RANDOM_STATE,
+        n_jobs=1,
+    )
+
+    learning_curve_results[model_name] = {
+        "train_sizes": train_sizes,
+        "training_rmse": -train_scores,
+        "validation_rmse": -validation_scores,
+    }
+```
+
+```{python}
+#| label: fig-housing-learning-curves
+#| fig-cap: "Learning curves distinguish a high-error plateau from a persistent training-validation gap without consulting the test set."
+#| fig-width: 11
+#| fig-height: 4.5
+#| code-fold: true
+#| code-summary: "Show code"
+
+fig, axes = plt.subplots(1, 2, figsize=(11, 4.5), sharey=True)
+panel_titles = {
+    "Linear regression": "Underfitting signal: linear regression",
+    "Unrestricted decision tree": "Overfitting signal: decision tree",
+}
+
+for ax, (model_name, results) in zip(
+    axes,
+    learning_curve_results.items(),
+):
+    train_sizes = results["train_sizes"]
+    training_mean = results["training_rmse"].mean(axis=1)
+    training_std = results["training_rmse"].std(axis=1)
+    validation_mean = results["validation_rmse"].mean(axis=1)
+    validation_std = results["validation_rmse"].std(axis=1)
+
+    ax.plot(
+        train_sizes,
+        training_mean,
+        marker="o",
+        linewidth=2,
+        label="Training RMSE",
+    )
+    ax.fill_between(
+        train_sizes,
+        training_mean - training_std,
+        training_mean + training_std,
+        alpha=0.15,
+    )
+    ax.plot(
+        train_sizes,
+        validation_mean,
+        marker="s",
+        linewidth=2,
+        label="Validation RMSE",
+    )
+    ax.fill_between(
+        train_sizes,
+        validation_mean - validation_std,
+        validation_mean + validation_std,
+        alpha=0.15,
+    )
+    ax.set_title(panel_titles[model_name])
+    ax.set_xlabel("Training observations")
+    ax.legend()
+
+axes[0].set_ylabel("RMSE (lower is better)")
+plt.tight_layout()
+plt.show()
+```
+
+The linear model's curves approach one another at a relatively high RMSE, consistent with insufficient model flexibility for the available relationships. The tree keeps an extremely low training RMSE while its validation RMSE remains much higher, which is direct evidence of overfitting. More observations may narrow a gap, but tree regularization or an ensemble is a more direct response than assuming that additional data will solve it.
+
 ## Fine-Tune the Pipeline
 
 Preprocessing choices are model hyperparameters. The number of geographic clusters is therefore tuned in the same search as the forest's feature sampling and leaf size. `RandomizedSearchCV` controls the computational budget directly and explores more distinct values than a small rectangular grid.
@@ -861,7 +971,7 @@ An end-to-end machine learning project connects technical choices to an operatio
 - automate and validate data acquisition;
 - isolate the test set before exploratory work;
 - fit every learned transformation inside the validation process;
-- compare against a simple baseline and diagnose overfitting;
+- compare against a simple baseline and diagnose underfitting and overfitting;
 - tune preprocessing and model choices together;
 - inspect residuals and subgroup errors, not only a global score;
 - evaluate the selected pipeline once on held-out data;

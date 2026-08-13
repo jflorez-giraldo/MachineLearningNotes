@@ -6,9 +6,11 @@ execute:
   enabled: true
 ---
 
+{{< chapter-actions >}}
+
 ## Introduction
 
-Support Vector Machines (SVMs) are supervised learning models that can be used for classification, regression, and outlier detection. Their cenztral idea is geometric: instead of merely finding a decision boundary that separates classes, an SVM seeks a boundary with the **largest possible margin** between the classes.
+Support Vector Machines (SVMs) can be used for classification, regression, and novelty detection. Their central idea is geometric: in the linearly separable hard-margin setting, an SVM selects the separating hyperplane with the largest geometric margin. Practical soft-margin SVMs instead balance margin width against training violations [@cortes1995svm].
 
 SVMs are especially effective for small- and medium-sized datasets with complex decision boundaries. They can model both linear and nonlinear relationships, but they are sensitive to feature scaling and their performance depends strongly on the choice of hyperparameters.
 
@@ -24,11 +26,12 @@ After completing this chapter, you should be able to:
 - use linear, polynomial, and radial basis function kernels;
 - interpret the role of `gamma` in an RBF kernel;
 - fit SVM classifiers and regressors with Scikit-Learn;
+- apply a one-class SVM for novelty detection;
 - diagnose underfitting and overfitting in an SVM model.
 :::
 
 ```{python}
-#| label: imports
+#| label: chapter05-imports
 #| include: false
 
 import numpy as np
@@ -36,9 +39,17 @@ import matplotlib.pyplot as plt
 
 from sklearn.datasets import load_iris, make_moons
 from sklearn.inspection import DecisionBoundaryDisplay
-from sklearn.pipeline import make_pipeline
+from sklearn.compose import TransformedTargetRegressor
+from sklearn.metrics import (
+    accuracy_score,
+    balanced_accuracy_score,
+    confusion_matrix,
+    f1_score,
+)
+from sklearn.model_selection import GridSearchCV, StratifiedKFold, train_test_split
+from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import StandardScaler, PolynomialFeatures
-from sklearn.svm import LinearSVC, SVC, LinearSVR, SVR
+from sklearn.svm import LinearSVC, OneClassSVM, SVC, LinearSVR, SVR
 ```
 
 ## Linear SVM classification
@@ -83,7 +94,7 @@ In two dimensions, the decision boundary is a line. In three dimensions, it is a
 
 ```{python}
 #| label: fig-large-margin-classification
-#| fig-cap: "Several linear decision boundaries can separate the classes, but the SVM selects the one with the largest margin."
+#| fig-cap: "Several boundaries separate the classes; a finite-C linear SVM closely approximates the hard-margin separator."
 #| fig-width: 10
 #| fig-height: 4
 #| code-fold: true
@@ -107,10 +118,11 @@ binary_mask = (y_margin == 0) | (y_margin == 1)
 X_margin = X_margin[binary_mask]
 y_margin = y_margin[binary_mask]
 
-# Train an almost hard-margin linear SVM
+# Finite C remains a soft-margin model. Here C=100 closely approximates the
+# hard-margin solution for these separable, consistently scaled features.
 svm_margin_clf = SVC(
     kernel="linear",
-    C=1e100
+    C=100
 )
 
 svm_margin_clf.fit(
@@ -240,7 +252,7 @@ ax.grid(alpha=0.3)
 ax.legend(loc="upper left", fontsize=8)
 
 # ---------------------------------------------------------
-# Right panel: maximum-margin separator
+# Right panel: soft-margin approximation to the hard-margin separator
 # ---------------------------------------------------------
 
 ax = axes[1]
@@ -270,7 +282,7 @@ ax.set_xlabel("Petal length (cm)")
 ax.set_xlim(0, 5.5)
 ax.set_ylim(0, 2)
 ax.set_aspect("equal")
-ax.set_title("Maximum-margin classifier")
+ax.set_title("Near hard-margin solution")
 ax.grid(alpha=0.3)
 ax.legend(loc="upper left", fontsize=8)
 
@@ -280,14 +292,20 @@ plt.show()
 
 The left panel shows that several linear decision boundaries can separate the two classes correctly. However, these boundaries are not equally robust: some of them pass very close to the training observations, so a small change in the data could lead to misclassification.
 
-The right panel shows the boundary selected by a linear Support Vector Machine. Instead of choosing an arbitrary separating line, the SVM maximizes the distance between the decision boundary and the closest training observations from each class.
+The right panel shows a finite-`C` soft-margin solution that approximates the hard-margin separator for this separable dataset. In exact hard-margin classification, the SVM maximizes the minimum geometric distance to the training observations; with finite `C`, it trades that goal against margin violations.
 
 The dashed lines represent the margins, while the highlighted observations are the support vectors. These support vectors determine the position and orientation of the separating hyperplane.
 
 
 ### Margin and support vectors
 
-Many different hyperplanes may separate a linearly separable dataset. An SVM selects the one that maximizes the distance between the decision boundary and the closest observations from each class.
+Many different hyperplanes may separate a linearly separable dataset. Because multiplying $(\mathbf{w},b)$ by a positive constant leaves the decision boundary unchanged, hard-margin SVMs use the **canonical normalization**
+
+$$
+\min_i y_i\left(\mathbf{w}^{\mathsf T}\mathbf{x}_i+b\right)=1.
+$$
+
+Under this normalization, an SVM selects the separator that maximizes the minimum geometric distance to the training observations.
 
 The two margin boundaries are
 
@@ -307,84 +325,15 @@ $$
 \frac{2}{\lVert\mathbf{w}\rVert}.
 $$
 
-Therefore, maximizing the margin is equivalent to minimizing $\lVert\mathbf{w}\rVert$.
+Therefore, under canonical normalization, maximizing the margin is equivalent to minimizing $\lVert\mathbf{w}\rVert$ (conventionally $\tfrac{1}{2}\lVert\mathbf{w}\rVert^2$) [@cortes1995svm].
 
-The observations that lie on or inside the margin are called **support vectors**. These observations determine the position of the decision boundary. Observations located far from the margin generally do not affect the fitted hyperplane.
+In an exact hard-margin solution, support vectors lie on a margin boundary and satisfy $y_i f(\mathbf{x}_i)=1$. In a soft-margin solution, support vectors are the observations with nonzero dual coefficients: they may lie on the margin, inside it, or on the wrong side of the decision boundary. Thus, “support vector” is not synonymous with “misclassified observation.” Observations with zero dual coefficients do not directly enter the fitted decision function.
 
-### A maximum-margin classifier
+::: {.callout-note}
+## Illustrations are not evaluations
 
-The following example uses two Iris features to illustrate a linear SVM. The figure is generated entirely with Python.
-
-```{python}
-#| label: fig-linear-svm
-#| fig-cap: "Linear SVM classification and its maximum-margin decision boundary."
-#| fig-width: 7
-#| fig-height: 5
-#| code-fold: true
-#| code-summary: "Show code"
-iris = load_iris(as_frame=True)
-
-X = iris.data.loc[
-    iris.target.isin([0, 1]),
-    ["petal length (cm)", "petal width (cm)"]
-].to_numpy()
-
-y = iris.target[iris.target.isin([0, 1])].to_numpy()
-
-linear_svm = make_pipeline(
-    StandardScaler(),
-    SVC(kernel="linear", C=1_000)
-)
-
-linear_svm.fit(X, y)
-
-fig, ax = plt.subplots(figsize=(7, 5))
-
-DecisionBoundaryDisplay.from_estimator(
-    linear_svm,
-    X,
-    response_method="decision_function",
-    plot_method="contour",
-    levels=[-1, 0, 1],
-    linestyles=["--", "-", "--"],
-    ax=ax
-)
-
-ax.scatter(
-    X[y == 0, 0],
-    X[y == 0, 1],
-    marker="o",
-    label="Iris setosa"
-)
-
-ax.scatter(
-    X[y == 1, 0],
-    X[y == 1, 1],
-    marker="s",
-    label="Iris versicolor"
-)
-
-support_vectors_scaled = linear_svm.named_steps["svc"].support_vectors_
-support_vectors = linear_svm.named_steps["standardscaler"].inverse_transform(
-    support_vectors_scaled
-)
-
-ax.scatter(
-    support_vectors[:, 0],
-    support_vectors[:, 1],
-    s=180,
-    facecolors="none",
-    linewidths=1.5,
-    label="Support vectors"
-)
-
-ax.set_xlabel("Petal length (cm)")
-ax.set_ylabel("Petal width (cm)")
-ax.legend()
-plt.show()
-```
-
-The solid line represents the decision boundary. The dashed lines represent the margins, and the circled observations are the support vectors.
+The decision-boundary plots in this chapter fit models to all displayed observations to explain geometry. They are pedagogical training-set views, not estimates of predictive performance. The complete workflow later in the chapter uses cross-validation and an untouched test set.
+:::
 
 ## Why feature scaling matters
 
@@ -470,7 +419,7 @@ svm_clf = make_pipeline(
     LinearSVC(C=1, loss="hinge", dual=True, random_state=42)
 )
 
-svm_clf.fit(X, y)
+svm_clf.fit(X_margin, y_margin)
 ```
 
 ## Hard-margin classification
@@ -503,7 +452,7 @@ The following example illustrates two situations where hard-margin classificatio
 
 ```{python}
 #| label: fig-hard-margin-limitations
-#| fig-cap: "Hard-margin SVM is extremely sensitive to outliers."
+#| fig-cap: "Hard-margin infeasibility and the sensitivity of a near hard-margin approximation to an influential observation."
 #| fig-width: 10
 #| fig-height: 4
 #| code-fold: true
@@ -539,9 +488,11 @@ y_sensitive = np.concatenate([
     y_outliers[1:]
 ])
 
+# A moderate finite C illustrates a close soft-margin approximation; SVC does
+# not expose an exact hard-margin mode.
 hard_margin_svm = SVC(
     kernel="linear",
-    C=1e9
+    C=100
 )
 
 hard_margin_svm.fit(
@@ -641,7 +592,7 @@ plt.show()
 ```
 The left panel illustrates a situation where the classes are no longer perfectly linearly separable because of a single mislabeled observation. In this case, a hard-margin SVM cannot find a separating hyperplane, regardless of how it is positioned.
 
-The right panel shows a different but equally important limitation. Although perfect separation is still possible, a single outlier forces the decision boundary to rotate substantially in order to classify every training instance correctly. As a consequence, the resulting classifier is likely to generalize poorly to unseen data.
+The right panel shows a different but equally important limitation. Although perfect separation is still possible, a nearly hard-margin fit can rotate substantially in response to one influential observation. The plotted `SVC(C=100)` is still a soft-margin estimator, used here as a documented finite-`C` approximation because Scikit-Learn's `SVC` does not provide an exact hard-margin mode [@scikitLearn2025].
 
 These examples highlight why hard-margin classification is rarely used in practice. Real-world datasets almost always contain noise, measurement errors, or overlapping classes. Instead, Support Vector Machines generally employ **soft-margin classification**, which allows a small number of margin violations in exchange for a decision boundary that is much more robust.
 
@@ -742,9 +693,10 @@ is the signed functional margin.
 
 Three cases are possible:
 
-- if $y_i f(\mathbf{x}_i)\geq 1$, the observation is correctly classified and outside the margin, so the loss is zero;
+- if $y_i f(\mathbf{x}_i)\geq 1$, the observation is correctly classified and on or outside the margin, so the loss is zero;
 - if $0<y_i f(\mathbf{x}_i)<1$, it is correctly classified but inside the margin;
-- if $y_i f(\mathbf{x}_i)\leq 0$, it is misclassified.
+- if $y_i f(\mathbf{x}_i)=0$, it lies exactly on the decision boundary and the class assignment is a tie determined by the implementation's convention;
+- if $y_i f(\mathbf{x}_i)<0$, it is misclassified.
 
 ```{python}
 #| label: fig-hinge-loss
@@ -970,6 +922,8 @@ where $\phi(\cdot)$ represents a potentially high-dimensional feature transforma
 
 The kernel trick makes it possible to work with the inner products in that transformed space without explicitly computing all transformed features.
 
+Not every similarity function is a valid SVM kernel. For any finite set of observations, a valid real-valued kernel must produce a symmetric, positive-semidefinite Gram matrix. This condition ensures that the kernel corresponds to an inner product in some feature space. Scikit-Learn accepts built-in kernels, a precomputed Gram matrix, or a callable, but accepting a callable does not guarantee that the supplied function satisfies this mathematical requirement [@scikitLearn2025].
+
 Common kernels include:
 
 ### Linear kernel
@@ -1054,7 +1008,7 @@ ax.set_ylabel("$x_2$")
 plt.show()
 ```
 
-If the model underfits, possible adjustments include increasing `degree`, increasing `C`, or changing `coef0`. If it overfits, the reverse adjustments may help.
+Polynomial-kernel tuning is not monotonic. Raising `degree` does not guarantee a more useful boundary or better training score because `degree`, `gamma`, `coef0`, and `C` jointly determine the feature-space geometry and regularization. Similarly, simply reversing one adjustment does not guarantee that overfitting will decrease. Tune these parameters together with cross-validation, preferably over small, computationally plausible grids.
 
 ## Similarity features
 
@@ -1449,7 +1403,7 @@ prediction
 
 ## SVM regression
 
-SVMs can also be used for regression. The objective is reversed relative to classification: the model attempts to place as many observations as possible inside an $\varepsilon$-wide tube around the regression function.
+SVMs can also be used for regression. The objective is reversed relative to classification: the model attempts to place as many observations as possible inside a tube extending $\varepsilon$ above and $\varepsilon$ below the regression function. Its total vertical width is therefore $2\varepsilon$.
 
 For prediction function
 
@@ -1519,7 +1473,27 @@ plt.tight_layout()
 plt.show()
 ```
 
-The model is called $\varepsilon$-insensitive because movements of training observations within the tube do not affect the loss.
+The model is called $\varepsilon$-insensitive because movements of training observations within the tube do not affect the loss. In Scikit-Learn, `epsilon` and the residual penalty controlled by `C` use the target's numerical units, so changing a target from dollars to thousands of dollars changes their practical meaning [@scikitLearn2025].
+
+When target magnitudes make tuning awkward, `TransformedTargetRegressor` can standardize `y` during fitting and automatically invert that transformation for predictions:
+
+```{python}
+#| label: scaled-target-svr
+
+scaled_target_svr = TransformedTargetRegressor(
+    regressor=make_pipeline(
+        StandardScaler(),
+        SVR(kernel="rbf", C=1, epsilon=0.1, gamma="scale")
+    ),
+    transformer=StandardScaler()
+)
+
+scaled_target_svr.fit(X_reg, y_reg)
+scaled_target_predictions = scaled_target_svr.predict(X_reg[:3])
+scaled_target_predictions
+```
+
+Here, `epsilon=0.1` is measured in standardized-target units during fitting, while `predict()` returns values on the original target scale. In a parameter search, the nested name is `regressor__svr__epsilon`. Fit the target transformer only through the wrapper inside each training or cross-validation fold; never standardize all target values before splitting.
 
 ### Nonlinear SVR
 
@@ -1569,6 +1543,36 @@ plt.show()
 
 A larger `C` reduces regularization and attempts to fit the training observations more closely. A smaller `C` produces a smoother model.
 
+## Novelty detection with `OneClassSVM`
+
+`OneClassSVM` estimates a boundary around a reference distribution without requiring class labels. It is most appropriate for **novelty detection**: training data should be clean, or at least contain very little contamination, and future observations are flagged when they fall outside the learned region. This differs from supervised classification and from the harder task of fitting directly to a substantially contaminated dataset [@scikitLearn2025].
+
+```{python}
+#| label: one-class-svm
+
+rng = np.random.default_rng(42)
+X_reference = rng.normal(loc=0, scale=1, size=(160, 2))
+X_future = np.array([
+    [0.2, -0.3],
+    [-0.8, 0.5],
+    [3.8, 4.2],
+    [-4.0, 3.5],
+])
+
+novelty_detector = make_pipeline(
+    StandardScaler(),
+    OneClassSVM(kernel="rbf", gamma="scale", nu=0.05)
+)
+novelty_detector.fit(X_reference)
+
+novelty_labels = novelty_detector.predict(X_future)
+novelty_scores = novelty_detector.decision_function(X_future)
+
+list(zip(X_future.tolist(), novelty_labels.tolist(), novelty_scores.round(3)))
+```
+
+Predictions are `+1` for observations inside the estimated region and `-1` for flagged novelties; larger decision scores indicate greater compatibility with the reference distribution. The parameter `nu` is not the expected novelty rate. Under the one-class SVM optimization assumptions, it is an upper bound on the fraction of training errors and a lower bound on the fraction of support vectors. Results can be sensitive to scaling, `gamma`, and `nu`, so select them using domain knowledge or labeled validation anomalies when available. A low score is evidence of distributional difference, not proof that an observation is erroneous, dangerous, or from a particular alternative class.
+
 ## Computational considerations
 
 The main Scikit-Learn SVM estimators have different computational characteristics.
@@ -1585,7 +1589,7 @@ Kernel SVMs usually require substantial computation as the number of observation
 
 ## Practical modeling workflow
 
-A sound SVM workflow includes:
+A sound SVM workflow keeps preprocessing, model selection, and final evaluation separate [@scikitLearn2025]:
 
 1. split the data into training and test sets;
 2. place preprocessing and SVM estimation in one pipeline;
@@ -1596,20 +1600,145 @@ A sound SVM workflow includes:
 7. evaluate the final model once on untouched test data;
 8. inspect class imbalance and choose suitable metrics.
 
-Example pipeline:
+The following complete example uses only generated data. The stratified split preserves class proportions, and the test set is set aside immediately.
 
 ```{python}
-#| label: practical-svm-pipeline
+#| label: svm-workflow-split
 
-svm_pipeline = make_pipeline(
-    StandardScaler(),
-    SVC(
-        kernel="rbf",
-        C=1,
-        gamma="scale"
-    )
+X_workflow, y_workflow = make_moons(
+    n_samples=500,
+    noise=0.25,
+    random_state=42
+)
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X_workflow,
+    y_workflow,
+    test_size=0.20,
+    stratify=y_workflow,
+    random_state=42
 )
 ```
+
+Scaling belongs inside `Pipeline`, so every cross-validation training fold fits its own scaler. The logarithmic grids cover multiplicative changes in `C` and `gamma`; a linear candidate is included as a lower-complexity comparison.
+
+```{python}
+#| label: svm-workflow-search
+
+svm_pipeline = Pipeline([
+    ("scale", StandardScaler()),
+    ("svc", SVC())
+])
+
+parameter_grid = [
+    {
+        "svc__kernel": ["linear"],
+        "svc__C": np.logspace(-2, 2, 5),
+    },
+    {
+        "svc__kernel": ["rbf"],
+        "svc__C": np.logspace(-2, 2, 5),
+        "svc__gamma": np.logspace(-2, 1, 4),
+    },
+]
+
+stratified_cv = StratifiedKFold(
+    n_splits=5,
+    shuffle=True,
+    random_state=42
+)
+
+svm_search = GridSearchCV(
+    estimator=svm_pipeline,
+    param_grid=parameter_grid,
+    scoring="balanced_accuracy",
+    cv=stratified_cv,
+    return_train_score=True,
+    n_jobs=-1,
+    refit=True
+)
+svm_search.fit(X_train, y_train)
+```
+
+`cv_results_` contains the training and validation score for every candidate. Reporting both helps distinguish insufficient flexibility from excessive flexibility without consulting the test set.
+
+```{python}
+#| label: svm-workflow-cv-results
+
+cv_results = svm_search.cv_results_
+top_indices = np.argsort(cv_results["rank_test_score"])[:5]
+
+cv_summary = [
+    {
+        "parameters": {
+            name: value.item() if isinstance(value, np.generic) else value
+            for name, value in cv_results["params"][index].items()
+        },
+        "mean_train_balanced_accuracy": float(
+            round(cv_results["mean_train_score"][index], 3)
+        ),
+        "mean_validation_balanced_accuracy": float(
+            round(cv_results["mean_test_score"][index], 3)
+        ),
+        "validation_standard_deviation": float(
+            round(cv_results["std_test_score"][index], 3)
+        ),
+    }
+    for index in top_indices
+]
+
+cv_summary
+```
+
+```{python}
+#| label: svm-workflow-diagnosis
+
+best_index = svm_search.best_index_
+best_train_score = cv_results["mean_train_score"][best_index]
+best_validation_score = cv_results["mean_test_score"][best_index]
+generalization_gap = best_train_score - best_validation_score
+
+if best_validation_score < 0.75:
+    cv_diagnosis = "Possible underfitting: both validation performance and model utility are low."
+elif generalization_gap > 0.08:
+    cv_diagnosis = "Possible overfitting: training performance substantially exceeds validation performance."
+else:
+    cv_diagnosis = "No strong underfitting or overfitting signal in the cross-validation scores."
+
+{
+    "best_parameters": {
+        name: value.item() if isinstance(value, np.generic) else value
+        for name, value in svm_search.best_params_.items()
+    },
+    "mean_train_balanced_accuracy": float(round(best_train_score, 3)),
+    "mean_validation_balanced_accuracy": float(round(best_validation_score, 3)),
+    "train_validation_gap": float(round(generalization_gap, 3)),
+    "diagnosis": cv_diagnosis,
+}
+```
+
+The thresholds in this diagnostic are teaching heuristics, not universal rules. Adequate performance depends on the application, and fold variability should also be considered. Only after all choices are fixed do we use the held-out set, exactly once:
+
+```{python}
+#| label: svm-workflow-final-test
+
+y_test_prediction = svm_search.predict(X_test)
+
+final_test_metrics = {
+    "accuracy": round(accuracy_score(y_test, y_test_prediction), 3),
+    "balanced_accuracy": float(
+        round(balanced_accuracy_score(y_test, y_test_prediction), 3)
+    ),
+    "f1": round(f1_score(y_test, y_test_prediction), 3),
+    "confusion_matrix": confusion_matrix(
+        y_test, y_test_prediction
+    ).tolist(),
+}
+
+final_test_metrics
+```
+
+Accuracy summarizes the overall hit rate, balanced accuracy gives equal weight to the two class recalls, F1 combines precision and recall for class 1, and the confusion matrix exposes the error counts. These test metrics estimate final performance; they must not trigger another round of tuning. If they are unexpectedly weak, report that result and design a new evaluation rather than repeatedly adapting to this test set.
 
 ## Common mistakes
 
@@ -1639,22 +1768,28 @@ The test set should not be used to select `C`, `gamma`, the kernel, or any prepr
 
 ## Chapter summary
 
-Support Vector Machines build decision boundaries by maximizing the margin between classes. The closest training observations, called support vectors, determine the boundary. Hard-margin classification requires perfect linear separation, while soft-margin classification allows violations controlled by `C`.
+Under canonical normalization, a hard-margin SVM finds the widest-margin separator for linearly separable training data. A soft-margin SVM instead balances margin width against violations through `C`. Its support vectors have nonzero dual coefficients and may be on the margin, inside it, or misclassified.
 
-Nonlinear SVMs use kernels to represent complex boundaries without explicitly generating all transformed features. The polynomial and RBF kernels are common choices. In an RBF model, `gamma` controls the radius of influence of each observation, while `C` controls the penalty for margin violations.
+Nonlinear SVMs use valid positive-semidefinite kernels to represent complex boundaries without explicitly generating all transformed features. Polynomial-kernel behavior depends jointly on `degree`, `gamma`, `coef0`, and `C`; it is not monotonic in degree. In an RBF model, `gamma` controls the radius of influence, while `C` controls the penalty for margin violations.
 
-SVM regression uses an $\varepsilon$-insensitive tube and ignores prediction errors smaller than $\varepsilon$. In both classification and regression, feature scaling and careful hyperparameter tuning are essential.
+SVM regression ignores errors within $\varepsilon$ of the fitted function, giving a tube of total width $2\varepsilon$. Target scaling changes the units of `epsilon` and `C`; `TransformedTargetRegressor` can manage that transformation safely. `OneClassSVM` supports novelty detection when its reference training sample is mostly clean, but a novelty flag does not explain why an observation differs.
+
+In all SVM applications, scaling and hyperparameter selection must occur inside the training process. Use a pipeline, tune on cross-validation folds, diagnose train-validation gaps, and evaluate the selected model once on an untouched test set. Decision-boundary plots fitted to displayed data explain model geometry but do not estimate generalization performance.
 
 ## Exercises
 
-1. Fit linear SVM classifiers to the Iris dataset using several values of `C`. Compare the number of support vectors and the width of the margin.
+1. Fit finite-`C` linear SVM classifiers to two Iris classes using several modest values of `C`. Compare margin violations and support-vector counts, and explain why none of these fits is an exact hard-margin estimator.
 
-2. Generate a moons dataset with a higher noise level. Compare a polynomial-feature SVM, a polynomial-kernel SVM, and an RBF SVM.
+2. Generate a moons dataset with a higher noise level. Compare a polynomial-feature SVM, a polynomial-kernel SVM, and an RBF SVM using the same stratified cross-validation folds. Do not use the test set to choose among them.
 
-3. For an RBF classifier, create a logarithmic grid of values for `C` and `gamma`. Use cross-validation to select the best combination.
+3. For an RBF classifier, create logarithmic grids for `C` and `gamma` inside a leakage-safe pipeline. Report mean training and validation scores, their gap, and one final held-out balanced accuracy.
 
-4. Explain why increasing `gamma` may lead to overfitting.
+4. Explain why increasing RBF `gamma` may lead to overfitting and why increasing polynomial `degree` need not change performance monotonically.
 
-5. Compare `LinearSVC` and `SVC(kernel="linear")` on the same standardized dataset. Examine their accuracy, training time, and available attributes.
+5. Compare `LinearSVC` and `SVC(kernel="linear")` on the same standardized training folds. Examine balanced accuracy, training time, support-vector availability, and the effect of `C`.
 
-6. Fit an `SVR` model to a nonlinear regression dataset. Study how the fitted curve changes when `C`, `epsilon`, and `gamma` are varied.
+6. Fit an `SVR` model to a nonlinear regression dataset. Compare tuning with the target in original units and with `TransformedTargetRegressor`; interpret `epsilon` in each case.
+
+7. Train `OneClassSVM` on clean simulated reference observations, then test increasingly shifted observations. Vary `nu` and `gamma`, and explain why the fraction flagged in future data is not guaranteed to equal `nu`.
+
+8. For the selected classifier in the workflow, use `cv_results_` to identify one clearly underfit candidate and one candidate that shows a larger train-validation gap. Justify both diagnoses without consulting the test set.

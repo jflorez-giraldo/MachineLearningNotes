@@ -9,7 +9,7 @@ project:
 book:
   title: "Hands-On Machine Learning Notes"
   subtitle: "Study Notes and Teaching Materials Based on Hands-On Machine Learning with Scikit-Learn and PyTorch"
-  author: "Jonathan Florez"
+  author: "Jonathan Florez Giraldo"
   output-file: machine-learning-I
   downloads:
     - pdf
@@ -18,9 +18,6 @@ book:
     Study notes, mathematical explanations, code walkthroughs,
     teaching materials, and practical experiments based on
     Hands-On Machine Learning with Scikit-Learn and PyTorch.
-
-  cover-image: cover.png
-  cover-image-alt: "Cover of Hands-On Machine Learning Notes"
 
   page-navigation: true
 
@@ -85,11 +82,6 @@ format:
     code-overflow: wrap
     #code-fold: true
     #code-summary: "Show code"
-    code-tools:
-      source: true
-      toggle: false
-      caption: "Code"
-
     code-line-numbers: false
     highlight-style: github
 
@@ -121,9 +113,7 @@ format:
 
 execute:
   freeze: auto
-  warning: false
+  warning: true
   message: false
   echo: true
   cache: true
-
-

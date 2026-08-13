@@ -1,5 +1,207 @@
-# Introduction 
+# Preface {.unnumbered}
 
-This is a book created from markdown and executable code.
+## Purpose and approach
 
-See @knuth84 for additional discussion of literate programming.
+Machine learning is simultaneously a statistical, computational, and applied
+discipline. A model can be expressed as an optimization problem, implemented in
+a few lines of code, and evaluated with a familiar metric, yet still fail
+because the target was poorly defined, information leaked across data splits,
+the validation design did not match the intended use, or the model's assumptions
+were incompatible with the data-generating process.
+
+This book was created as a course resource for **Machine Learning I** at the
+graduate level. Its purpose is not to catalogue estimators or to teach an API by
+example. Instead, it develops the reasoning required to move from an applied
+question to a defensible predictive analysis. Mathematical expressions,
+statistical interpretation, visual explanations, and executable code are used
+together so that theoretical ideas can be inspected computationally and
+computational results can be explained theoretically.
+
+The organization and several case studies are informed by Géron's *Hands-On
+Machine Learning with Scikit-Learn and PyTorch* [@geron2026homl]. The material
+is adapted to the objectives and sequence of this course, with particular
+emphasis on experimental design, leakage prevention, model diagnostics, and the
+connection between statistical assumptions and predictive behavior.
+
+## Intended audience
+
+The primary audience is master's students in **Applied Statistics, Data
+Science, Machine Learning**, and related quantitative programs. The book is
+also suitable for practitioners who already have a quantitative foundation and
+want to strengthen the methodological reasoning behind model development.
+
+Readers are expected to engage with machine learning from three complementary
+perspectives:
+
+- **Statistical:** identify assumptions, distinguish estimation from
+  evaluation, quantify uncertainty, and reason about generalization from a
+  sample to a target population.
+- **Computational:** implement transformations and estimators, understand the
+  role of optimization, construct reproducible workflows, and account for
+  computational constraints.
+- **Applied:** formulate a useful target, choose metrics that reflect the
+  decision context, diagnose failures, and communicate what a model can and
+  cannot support.
+
+These perspectives are deliberately interwoven. A technically valid model is
+not automatically useful, and a high score is not evidence of a valid analysis
+when the evaluation protocol is compromised.
+
+## Prerequisites
+
+The text assumes working knowledge of Python and familiarity with tabular data
+analysis. Readers should be able to interpret and modify code that uses arrays,
+data frames, functions, loops, and plots. Prior exposure to NumPy, pandas, and
+Matplotlib is helpful, although the examples are written to make the modeling
+logic visible.
+
+The mathematical prerequisites include introductory probability and
+statistics, vectors and matrices, functions of several variables, and basic
+differentiation. Readers should be comfortable with expectations, variance,
+conditional probability, matrix multiplication, derivatives, and mathematical
+notation. Relevant concepts are reviewed when they are central to a method, but
+the book does not replace full courses in probability, statistical inference,
+linear algebra, or programming.
+
+No advanced prior course in machine learning is required. The expected level of
+engagement, however, is graduate study: readers should question assumptions,
+reproduce experiments, compare alternatives, and justify conclusions rather
+than accept software output at face value.
+
+## Learning principles
+
+Several principles recur throughout the book.
+
+### Begin with the problem
+
+Modeling starts with the decision or scientific question, not with an
+algorithm. The unit of analysis, prediction target, available information,
+error costs, and deployment conditions determine whether a machine learning
+formulation is appropriate and how it should be evaluated.
+
+### Connect mathematics and computation
+
+Objective functions, gradients, distances, margins, impurity measures,
+probability models, and regularization penalties are more than notation. They
+explain why algorithms react to scaling, noise, dimensionality, class overlap,
+and hyperparameter changes. The code and visual experiments are designed to
+make these relationships observable.
+
+### Separate selection from evaluation
+
+Training data are used to estimate model parameters. Validation procedures are
+used to compare alternatives and select hyperparameters. Held-out test data are
+reserved for a final assessment of the selected workflow. Repeatedly consulting
+test results turns the test set into another validation set and invalidates its
+role as independent evidence.
+
+### Prevent information leakage
+
+Any transformation that learns from data, including imputation, scaling,
+encoding, feature selection, and dimensionality reduction, must be estimated
+without access to validation or test observations. Scikit-Learn pipelines are
+used throughout the book to make this requirement part of the implementation
+rather than an informal promise.
+
+### Diagnose, do not merely rank
+
+Average validation scores are useful but incomplete. Learning curves, confusion
+matrices, residuals, calibration, subgroup performance, model stability, and
+concrete prediction errors provide evidence about how and why a model fails.
+Model comparison therefore includes diagnosis, not only ranking.
+
+### Match methods to assumptions and constraints
+
+No model family dominates in every setting. Linear models, kernels, trees,
+nearest-neighbor methods, probabilistic classifiers, and ensembles impose
+different structures and computational costs. Selection should reflect the
+geometry and scale of the data, the amount of supervision available, the
+required interpretability, and the operational context.
+
+## Organization of the book
+
+The course follows a progression from complete workflows to increasingly
+specialized modeling tools.
+
+First, an end-to-end regression project establishes the full lifecycle of a
+machine learning system: problem formulation, data splitting, exploration,
+preprocessing, baseline construction, model comparison, tuning, error analysis,
+final evaluation, persistence, and monitoring. Classification then introduces
+metrics and diagnostic tools whose interpretation depends on thresholds, class
+imbalance, and the consequences of different errors.
+
+The next stage examines how models are trained. Linear and polynomial
+regression connect least squares to gradient-based optimization, while
+regularization and early stopping clarify the control of model complexity.
+Logistic and Softmax regression extend these ideas to probabilistic
+classification.
+
+The central chapters study major families of classical learning algorithms:
+support vector machines, decision trees, nearest neighbors, and Naive Bayes.
+Each family is developed from its governing idea and then examined through
+decision boundaries, hyperparameters, computational behavior, failure modes,
+and complete selection workflows.
+
+Ensemble methods show how aggregation, resampling, randomization, and sequential
+error correction can improve predictive performance. The final stage considers
+semi-supervised learning, where clustering and pseudo-labeling are used to
+exploit structure in data when labels are limited. This sequence broadens the
+modeling toolkit while preserving a common evaluation discipline.
+
+## How to study each chapter
+
+Each chapter begins with learning objectives that define the expected outcomes.
+A productive study routine is to:
+
+1. Read the objectives and identify the statistical and computational questions.
+2. Follow the conceptual development before focusing on implementation details.
+3. Execute the notebook in order so that shared state and random seeds remain
+   reproducible.
+4. Modify important hyperparameters and predict the effect before rerunning an
+   experiment.
+5. Interpret every figure and metric in relation to the data split and the
+   question being asked.
+6. Use the chapter summary to check understanding rather than replace the
+   development.
+7. Complete the exercises and justify methodological choices in words as well
+   as code.
+
+Some figures isolate one mechanism using synthetic or training data. These are
+pedagogical illustrations, not claims about out-of-sample performance. Formal
+model comparisons are identified by an explicit validation design and a stated
+metric.
+
+## Reproducibility and evaluation conventions
+
+Examples use fixed random seeds where stochastic behavior is not itself the
+object of study. Fixed seeds make results inspectable and comparable, but they
+do not establish stability. Where variation matters, conclusions should be
+checked across resamples, folds, or repeated runs.
+
+The following conventions guide the empirical work:
+
+- data partitions are created before exploratory choices that could influence
+  model development;
+- preprocessing learned from data is placed inside a pipeline;
+- cross-validation or a dedicated validation set supports model selection;
+- the test set is treated as a lockbox and opened only after the workflow has
+  been selected;
+- metrics are chosen and named explicitly rather than interpreted as generic
+  measures of quality;
+- uncertainty and variability are reported when they affect the conclusion;
+- reproducibility is treated as a prerequisite for scrutiny, not as proof that
+  a result generalizes.
+
+## Scope
+
+This volume concentrates on classical machine learning with Scikit-Learn. It
+emphasizes supervised learning, model evaluation, optimization, major model
+families, ensembles, and an introduction to learning with partially labeled
+data. The goal is to establish durable principles that transfer across
+algorithms and application domains.
+
+The examples cannot substitute for domain expertise, careful data governance,
+or external validation in a real deployment environment. They also do not
+replace the official documentation of the software libraries used. Their role
+is to provide a rigorous setting in which statistical ideas, computational
+tools, and applied judgment can be studied together.

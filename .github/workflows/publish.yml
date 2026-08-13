@@ -20,8 +20,8 @@ jobs:
       - name: Set up Quarto
         uses: quarto-dev/quarto-actions/setup@v2
 
-      - name: Render HTML using frozen results
-        run: quarto render --profile ci --to html
+      - name: Render book using frozen results
+        run: quarto render --profile ci --use-freezer
 
       - name: Publish to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4

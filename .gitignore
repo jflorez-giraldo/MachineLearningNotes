@@ -11,6 +11,9 @@ _book/
 .ipynb_checkpoints/
 __pycache__/
 *.pyc
+/.python/
+/.venv/
+/.tmp/
 /.quarto/
 **/*.quarto_ipynb
 
@@ -29,4 +32,5 @@ __pycache__/
 * 2.qmd
 * 2.ipynb
 * 2.png
+* 2.pdf
 * 2.quarto_ipynb_*

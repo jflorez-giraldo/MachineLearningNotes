@@ -6,9 +6,11 @@ execute:
   enabled: true
 ---
 
+{{< chapter-actions >}}
+
 ## Introduction
 
-Nearest Neighbors (k-NN) is one of the simplest and most intuitive supervised learning algorithms. Unlike many machine learning methods, k-NN does **not** build an explicit mathematical model during training. Instead, it simply stores the training observations and delays all computations until a prediction is required.
+Nearest Neighbors (k-NN) is one of the simplest and most intuitive supervised learning algorithms. The modern statistical formulation dates to the nearest-neighbor decision rule studied by Cover and Hart [@cover1967nearestneighbor]. Unlike many machine learning methods, k-NN does **not** estimate a parametric prediction equation during training. It retains the training observations and performs most of its work when a prediction is requested.
 
 For this reason, k-NN is known as an **instance-based** or **lazy learning** algorithm.
 
@@ -43,7 +45,20 @@ Nearest Neighbors relies on a simple assumption:
 Everything in k-NN follows from this idea.
 :::
 
----
+::: {.callout-note}
+## Learning objectives
+
+After completing this chapter, you should be able to:
+
+- explain classification and regression with nearest neighbors;
+- distinguish fixed-cardinality k-NN neighborhoods from fixed-radius neighborhoods;
+- explain how scaling, distance, weighting, and neighborhood size affect predictions;
+- build a leakage-safe `Pipeline` with `StandardScaler` and a nearest-neighbor estimator;
+- jointly tune neighborhood size, weighting, and Minkowski distance with cross-validation;
+- reserve the test set for one final evaluation;
+- evaluate nearest-neighbor regression with MAE, RMSE, and $R^2$;
+- diagnose ties, empty radius neighborhoods, high-dimensional data, and slow prediction.
+:::
 
 ## k-Nearest Neighbor Classification
 
@@ -55,7 +70,7 @@ $$
 
 meaning that only the closest observation is considered.
 
-The following figure illustrates the prediction process.
+@fig-knn-k1 illustrates the prediction process.
 
 ```{python}
 #| label: fig-knn-k1
@@ -101,6 +116,7 @@ ax.scatter(
     class0[:,0],
     class0[:,1],
     s=80,
+    marker="o",
     label="Class 0"
 )
 
@@ -108,6 +124,7 @@ ax.scatter(
     class1[:,0],
     class1[:,1],
     s=80,
+    marker="^",
     label="Class 1"
 )
 
@@ -135,7 +152,7 @@ ax.grid(alpha=.3)
 plt.show()
 ```
 
-The red star represents a new observation whose class is unknown.
+In @fig-knn-k1, the red star represents a new observation whose class is unknown. Shape as well as color distinguishes the two known classes, so the plot remains interpretable when colors are difficult to distinguish.
 
 The dashed line connects the new observation with its closest training instance.
 
@@ -146,8 +163,6 @@ k=1,
 $$
 
 the prediction is simply the class label of this nearest observation.
-
----
 
 If we increase the neighborhood size to
 
@@ -175,6 +190,7 @@ ax.scatter(
     class0[:,0],
     class0[:,1],
     s=80,
+    marker="o",
     label="Class 0"
 )
 
@@ -182,6 +198,7 @@ ax.scatter(
     class1[:,0],
     class1[:,1],
     s=80,
+    marker="^",
     label="Class 1"
 )
 
@@ -210,17 +227,15 @@ ax.grid(alpha=.3)
 plt.show()
 ```
 
-Compared with the previous figure, the prediction now depends on several nearby observations rather than on a single point.
+Compared with @fig-knn-k1, @fig-knn-k5 makes the prediction depend on several nearby observations rather than on a single point.
 
 As the value of $k$ increases, predictions generally become more stable because they are less influenced by individual observations. However, choosing a value that is too large may oversmooth the decision boundary and ignore important local patterns.
-
----
 
 ## Distance Metrics
 
 The concept of *nearest* depends entirely on the distance metric.
 
-The default metric in Scikit-Learn is the **Euclidean distance**
+In Scikit-Learn's nearest-neighbor estimators, the defaults `metric="minkowski"` and `p=2` make the effective distance Euclidean [@scikitLearn2025]:
 
 $$
 d(\mathbf{x},\mathbf{y}) = \sqrt{\sum_{j=1}^{p}(x_j-y_j)^2}.
@@ -235,13 +250,15 @@ $$
 Both are special cases of the **Minkowski distance**
 
 $$
-d(\mathbf{x},\mathbf{y})=\left(\sum_{j=1}^{p}|x_j-y_j|^q\right)^{1/q},
+d(\mathbf{x},\mathbf{y})=\left(\sum_{j=1}^{m}|x_j-y_j|^q\right)^{1/q},
 $$
 
 where
 
 - $q=1$ gives the Manhattan distance;
 - $q=2$ gives the Euclidean distance.
+
+For Minkowski distance to be a metric, $q\geq 1$. The mathematical symbol $q$ avoids confusing the exponent with the number of features $m$; Scikit-Learn exposes this exponent through the API parameter `p`.
 
 ::: {.callout-tip}
 ## Standardize the predictors
@@ -253,7 +270,7 @@ In practice, k-NN is almost always preceded by feature standardization or normal
 
 ## The `KNeighborsClassifier` Estimator
 
-Scikit-Learn implements the k-nearest neighbors algorithm through the `KNeighborsClassifier` class.
+Scikit-Learn implements the k-nearest neighbors algorithm through the `KNeighborsClassifier` class [@scikitLearn2025]. The canonical estimator used in this chapter places scaling and classification in one pipeline.
 
 Like most supervised learning estimators, its workflow consists of three steps:
 
@@ -274,7 +291,7 @@ X_knn, y_knn = make_moons(n_samples=300, noise=0.25, random_state=42)
 X_knn_train, X_knn_test, y_knn_train, y_knn_test = train_test_split(X_knn, y_knn, test_size=0.25, random_state=42, stratify=y_knn)
 ```
 
-The training and testing observations are shown below.
+Only the training observations are shown in @fig-knn-training-data. The test predictors and labels are not inspected before final evaluation.
 
 ```{python}
 #| label: fig-knn-training-data
@@ -292,6 +309,7 @@ ax.scatter(
     X_knn_train[y_knn_train == 0, 0],
     X_knn_train[y_knn_train == 0, 1],
     s=45,
+    marker="o",
     label="Class 0"
 )
 
@@ -299,6 +317,7 @@ ax.scatter(
     X_knn_train[y_knn_train == 1, 0],
     X_knn_train[y_knn_train == 1, 1],
     s=45,
+    marker="^",
     label="Class 1"
 )
 
@@ -310,14 +329,19 @@ ax.grid(alpha=0.3)
 plt.show()
 ```
 
-Next, we create a k-nearest neighbors classifier using three neighbors.
+Next, we create a canonical scaled classifier using three neighbors. Keeping `StandardScaler` inside the pipeline ensures that it is fitted only on the data available to each training operation.
 
 ```{python}
 #| label: create-knn-classifier
 
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
-knn_clf = KNeighborsClassifier(n_neighbors=3)
+knn_pipeline = Pipeline([
+    ("scaler", StandardScaler()),
+    ("knn", KNeighborsClassifier(n_neighbors=3))
+])
 ```
 
 The model is fitted using the training observations.
@@ -325,46 +349,12 @@ The model is fitted using the training observations.
 ```{python}
 #| label: fit-knn-classifier
 
-knn_clf.fit(X_knn_train, y_knn_train)
+_ = knn_pipeline.fit(X_knn_train, y_knn_train)
 ```
 
-Unlike Decision Trees or Logistic Regression, the fitting process does **not** estimate coefficients or construct decision rules.
+Unlike Decision Trees or Logistic Regression, fitting does not estimate coefficients or construct a parametric decision rule. It stores the transformed training observations and, depending on `algorithm`, may also construct a search index such as a KD tree or ball tree. This is still called *lazy learning* because predictions are determined from stored instances at query time, not because `fit()` necessarily performs no work.
 
-Instead, the algorithm simply stores the training observations in memory.
-
-Whenever predictions are requested, the stored observations are searched to identify the nearest neighbors.
-
-Predictions are obtained using the `predict()` method.
-
-```{python}
-#| label: predict-knn
-
-y_knn_pred = knn_clf.predict(X_knn_test)
-
-print("Predicted labels:")
-print(y_knn_pred)
-```
-
-The true labels are
-
-```{python}
-#| label: true-labels-knn
-
-print("True labels:")
-print(y_knn_test)
-```
-
-The classification accuracy is computed using the `score()` method.
-
-```{python}
-#| label: knn-accuracy
-
-accuracy = knn_clf.score(X_knn_test, y_knn_test)
-
-print(f"Test accuracy: {accuracy:.3f}")
-```
-
-For classification, the `score()` method returns the prediction accuracy,
+For classification, the estimator's `score()` method returns prediction accuracy,
 
 $$
 \text{Accuracy}=\frac{\text{Correct predictions}}{\text{Total predictions}}.
@@ -375,15 +365,13 @@ $$
 
 When a new observation is presented, the classifier:
 
-1. computes its distance to every training observation;
+1. finds nearby training observations using the fitted search strategy;
 2. identifies the three nearest neighbors;
-3. counts how many neighbors belong to each class;
+3. aggregates class votes, uniformly or by distance;
 4. predicts the class with the majority of votes.
 
-Unlike many machine learning algorithms, almost all the computational effort of k-NN occurs during prediction rather than during training.
+Prediction is generally more expensive than fitting, although fitting can include scaling and search-index construction.
 :::
-
----
 
 ## Main Hyperparameters
 
@@ -409,8 +397,6 @@ Larger values of $k$ generate smoother decision boundaries because the predictio
 
 The effect of choosing different values of $k$ will be explored in the next section.
 
----
-
 ## Effect of the Number of Neighbors
 
 The hyperparameter `n_neighbors` controls the complexity of the classifier.
@@ -422,15 +408,15 @@ To visualize this effect, we train three classifiers using different neighborhoo
 ```{python}
 #| label: knn-models
 
-from sklearn.neighbors import KNeighborsClassifier
+from sklearn.base import clone
 
-knn_1 = KNeighborsClassifier(n_neighbors=1)
-knn_3 = KNeighborsClassifier(n_neighbors=3)
-knn_9 = KNeighborsClassifier(n_neighbors=9)
+knn_1 = clone(knn_pipeline).set_params(knn__n_neighbors=1)
+knn_3 = clone(knn_pipeline).set_params(knn__n_neighbors=3)
+knn_9 = clone(knn_pipeline).set_params(knn__n_neighbors=9)
 
-knn_1.fit(X_knn_train, y_knn_train)
-knn_3.fit(X_knn_train, y_knn_train)
-knn_9.fit(X_knn_train, y_knn_train)
+_ = knn_1.fit(X_knn_train, y_knn_train)
+_ = knn_3.fit(X_knn_train, y_knn_train)
+_ = knn_9.fit(X_knn_train, y_knn_train)
 ```
 
 The following helper function plots the decision boundary of any fitted classifier.
@@ -458,16 +444,20 @@ def plot_decision_boundary(model, X, y, ax, title):
 
     ax.contour(xx, yy, Z, linewidths=1)
 
-    ax.scatter(X[y==0,0], X[y==0,1], s=55, label="Class 0")
+    ax.scatter(
+        X[y == 0, 0], X[y == 0, 1], s=55, marker="o", label="Class 0"
+    )
 
-    ax.scatter(X[y==1,0], X[y==1,1], s=55, label="Class 1")
+    ax.scatter(
+        X[y == 1, 0], X[y == 1, 1], s=55, marker="^", label="Class 1"
+    )
 
     ax.set_title(title)
     ax.set_xlabel(r"$x_1$")
     ax.set_ylabel(r"$x_2$")
 ```
 
-The next figure compares the decision boundaries for three different values of $k$.
+@fig-knn-k-comparison compares the decision boundaries for three different values of $k$.
 
 ```{python}
 #| label: fig-knn-k-comparison
@@ -515,7 +505,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-Several important observations can be made from the figure.
+Several important observations can be made from @fig-knn-k-comparison.
 
 - With **$k=1$**, the classifier creates a very irregular decision boundary that closely follows individual observations. Such models usually have **low bias but high variance**, making them sensitive to noise.
 
@@ -525,13 +515,7 @@ Several important observations can be made from the figure.
 
 The choice of $k$ illustrates one of the most common examples of the **bias-variance tradeoff** in machine learning.
 
-- Small values of $k$:
-  - low bias;
-  - high variance.
-
-- Large values of $k$:
-  - higher bias;
-  - lower variance.
+Small values of $k$ tend toward lower bias and higher variance; large values tend toward higher bias and lower variance.
 
 ::: {.callout-tip}
 ## Choosing an appropriate value of $k$
@@ -541,222 +525,49 @@ There is no universally optimal value of $k$.
 The best choice depends on the dataset and is usually determined using a validation set or cross-validation, as will be shown in the next section.
 :::
 
-## Selecting the Best Value of $k$
+## Selecting a Nearest-Neighbor Classifier
 
-The previous section showed that the value of $k$ controls the complexity of the classifier. Small values produce highly flexible decision boundaries, whereas larger values generate smoother models.
-
-Rather than selecting $k$ arbitrarily, it should be treated as a **hyperparameter** and chosen using **cross-validation**.
-
-Cross-validation estimates the predictive performance of the classifier by repeatedly dividing the training data into different training and validation subsets. This provides a more reliable estimate of the model's ability to generalize than relying on a single train-validation split.
-
-The following example evaluates neighborhood sizes ranging from 1 to 20 using **5-fold cross-validation**.
-
-```{python}
-#| label: knn-cross-validation
-
-from sklearn.model_selection import cross_val_score
-
-neighbors = range(1, 41)
-
-cv_mean_accuracy = []
-cv_std_accuracy = []
-
-for k in neighbors:
-
-    model = KNeighborsClassifier(n_neighbors=k)
-
-    scores = cross_val_score(model, X_knn_train, y_knn_train, cv=5, scoring="accuracy")
-
-    cv_mean_accuracy.append(scores.mean())
-    cv_std_accuracy.append(scores.std())
-```
-
-The average validation accuracy for each neighborhood size is shown below.
-
-```{python}
-#| label: fig-knn-cross-validation
-#| fig-cap: "Five-fold cross-validation accuracy as a function of the number of neighbors."
-#| fig-width: 8
-#| fig-height: 5
-#| code-fold: true
-#| code-summary: "Show code"
-
-fig, ax = plt.subplots(figsize=(8,5))
-
-ax.plot(
-    neighbors,
-    cv_mean_accuracy,
-    marker="o",
-    linewidth=2,
-    label="Mean CV accuracy"
-)
-
-ax.fill_between(
-    neighbors,
-    np.array(cv_mean_accuracy) - np.array(cv_std_accuracy),
-    np.array(cv_mean_accuracy) + np.array(cv_std_accuracy),
-    alpha=0.20,
-    label=r"$\pm1$ standard deviation"
-)
-
-ax.set_xlabel("Number of neighbors ($k$)")
-ax.set_ylabel("Cross-validation accuracy")
-ax.set_xticks(range(1, 41, 2))
-ax.grid(alpha=0.3)
-
-ax.legend()
-
-plt.show()
-```
-
-Several observations can typically be made from this figure.
-
-- Very small values of $k$ often exhibit higher variability across the validation folds because the classifier is highly sensitive to individual observations.
-
-- As $k$ increases, the validation accuracy usually improves until it reaches a maximum.
-
-- Beyond this point, performance may begin to decrease because the classifier becomes overly smooth and starts to underfit the data.
-
-The optimal value of $k$ is the one that maximizes the average cross-validation accuracy.
-
-The best neighborhood size can be identified programmatically.
-
-```{python}
-#| label: best-knn-k
-
-best_index = np.argmax(cv_mean_accuracy)
-
-best_k = list(neighbors)[best_index]
-
-best_cv_accuracy = cv_mean_accuracy[best_index]
-
-print(f"Best k: {best_k}")
-print(f"Mean CV accuracy: {best_cv_accuracy:.3f}")
-```
-
-Once the optimal value has been selected, the final model is retrained using the complete training set.
-
-```{python}
-#| label: final-knn-model
-
-final_knn = KNeighborsClassifier(n_neighbors=best_k)
-
-final_knn.fit(X_knn_train, y_knn_train)
-```
-
-Its predictive performance is then evaluated **once** on the independent test set.
-
-```{python}
-#| label: final-knn-test-performance
-
-test_accuracy = final_knn.score(X_knn_test, y_knn_test)
-
-print(
-    f"Test accuracy: {test_accuracy:.3f}"
-)
-```
-
-This final accuracy provides an unbiased estimate of the model's performance on unseen data because the test set was **not** used during hyperparameter selection.
-
-::: {.callout-tip}
-## Why use cross-validation?
-
-Selecting $k$ based on a single train-validation split may lead to unstable results because the estimated performance depends on one particular partition of the data.
-
-Cross-validation averages the validation performance over several different partitions, producing a more robust estimate of the model's generalization ability.
-:::
-
-::: {.callout-note}
-## A common workflow
-
-The complete workflow for hyperparameter tuning is:
-
-1. Split the data into training and test sets.
-2. Use cross-validation on the training set to select the optimal hyperparameters.
-3. Retrain the model using the entire training set.
-4. Evaluate the final model once on the independent test set.
-
-This procedure prevents information from the test set from influencing model selection and provides an unbiased estimate of predictive performance.
-:::
-
-### Hyperparameter Tuning with `GridSearchCV`
-
-In the previous example, the neighborhood size was selected by explicitly evaluating several values of $k$ using cross-validation. Although this approach is useful for understanding the underlying process, Scikit-Learn provides a more general solution through `GridSearchCV`.
-
-`GridSearchCV` automatically evaluates every candidate hyperparameter combination using cross-validation and returns the model with the best validation performance.
-
-When feature preprocessing is required, the recommended practice is to include all preprocessing steps inside a `Pipeline`. This guarantees that every fold of the cross-validation process performs preprocessing using only the corresponding training data, preventing data leakage.
+Neighborhood size, voting weights, and distance should be selected together rather than in isolated experiments. The search below consistently considers $k=1,\ldots,40$, both weighting schemes, and the Manhattan and Euclidean cases of Minkowski distance. `StratifiedKFold` is named explicitly so that every fold preserves class proportions and the split is reproducible.
 
 ```{python}
 #| label: knn-grid-search
 
-from sklearn.datasets import load_iris
-from sklearn.model_selection import GridSearchCV
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import GridSearchCV, StratifiedKFold
 
-iris = load_iris()
-
-X = iris.data
-y = iris.target
-
-pipe = Pipeline(
-    [
-        ("scaler", StandardScaler()),
-        ("knn", KNeighborsClassifier())
-    ]
+classification_cv = StratifiedKFold(
+    n_splits=5,
+    shuffle=True,
+    random_state=42
 )
 
-param_grid = {
-    "knn__n_neighbors": range(1, 41)
+classification_grid = {
+    "knn__n_neighbors": range(1, 41),
+    "knn__weights": ["uniform", "distance"],
+    "knn__metric": ["minkowski"],
+    "knn__p": [1, 2]
 }
 
 grid_search = GridSearchCV(
-    estimator=pipe,
-    param_grid=param_grid,
-    cv=5,
+    estimator=knn_pipeline,
+    param_grid=classification_grid,
+    cv=classification_cv,
     scoring="accuracy",
-    n_jobs=-1
+    n_jobs=-1,
+    refit=True
 )
 
-grid_search.fit(X, y)
+_ = grid_search.fit(X_knn_train, y_knn_train)
+
+print("Best parameters:", grid_search.best_params_)
+print(f"Best mean CV accuracy: {grid_search.best_score_:.3f}")
 ```
 
-The optimal neighborhood size is stored in `best_params_`.
-
-```{python}
-#| label: best-knn-grid
-
-print(
-    "Best k:",
-    grid_search.best_params_["knn__n_neighbors"]
-)
-
-print(
-    "Best CV accuracy:",
-    f"{grid_search.best_score_:.3f}"
-)
-```
-
-The complete optimized pipeline can be retrieved through
-
-```{python}
-#| label: best-pipeline
-
-best_pipeline = grid_search.best_estimator_
-
-best_pipeline
-```
-
-This object contains both the fitted `StandardScaler` and the optimized `KNeighborsClassifier`, making it immediately ready to predict new observations.
+Because the scaler is inside `knn_pipeline`, every candidate fits scaling parameters from each CV training fold only. `refit=True` then refits the selected complete pipeline on all training observations. Printing selected parameters is more informative and compact than displaying the estimator object itself.
 
 ::: {.callout-tip}
-## Why use a Pipeline?
+## Why use a pipeline?
 
-Performing feature standardization outside the cross-validation procedure would allow information from the validation folds to influence the preprocessing step.
-
-Including the scaler inside the `Pipeline` ensures that every fold is processed independently, preventing data leakage and producing a more reliable estimate of predictive performance.
+Scaling before cross-validation would let validation-fold values influence feature means and standard deviations. A pipeline prevents that leakage and carries exactly the fitted preprocessing needed for future observations.
 :::
 
 ## Distance-Weighted Neighbors
@@ -777,7 +588,7 @@ Scikit-Learn supports this idea through the `weights` hyperparameter.
 KNeighborsClassifier(n_neighbors=11, weights="distance")
 ```
 
-When `weights="distance"` is used, each neighbor contributes proportionally to the inverse of its distance from the query point.
+When `weights="distance"` is used, each neighbor ordinarily contributes proportionally to the inverse of its distance from the query point.
 
 Conceptually, the weight assigned to neighbor $i$ is
 
@@ -804,22 +615,29 @@ where
 - $N_k$ denotes the set of the $k$ nearest neighbors;
 - $I(\cdot)$ is the indicator function.
 
+The expression requires special handling at $d=0$. Scikit-Learn gives all nonzero-distance observations zero influence when one or more exact matches are present, then aggregates only the zero-distance matches. This avoids division by zero and allows duplicated observations to vote together.
+
+Uniform voting can tie, especially with an even $k$; weighted scores can tie as well. Scikit-Learn stores class labels in `classes_` order and resolves equal winning scores in favor of the class with the smaller stored index. A prediction can also depend on training order when multiple observations at the $k$-th boundary have exactly the same distance but not all can be included. Odd $k$ reduces binary uniform-vote ties but does not solve multiclass or equal-distance ambiguity.
 
 The following code compares the standard voting scheme with distance-weighted voting.
 
 ```{python}
 #| label: weighted-knn-models
 
-uniform_knn = KNeighborsClassifier(n_neighbors=11, weights="uniform")
+uniform_knn = clone(knn_pipeline).set_params(
+    knn__n_neighbors=11,
+    knn__weights="uniform"
+)
+distance_knn = clone(knn_pipeline).set_params(
+    knn__n_neighbors=11,
+    knn__weights="distance"
+)
 
-distance_knn = KNeighborsClassifier(n_neighbors=11, weights="distance")
-
-uniform_knn.fit(X_knn_train, y_knn_train)
-
-distance_knn.fit(X_knn_train, y_knn_train)
+_ = uniform_knn.fit(X_knn_train, y_knn_train)
+_ = distance_knn.fit(X_knn_train, y_knn_train)
 ```
 
-The corresponding decision boundaries are shown below.
+The corresponding decision boundaries are shown in @fig-weighted-knn.
 
 ```{python}
 #| label: fig-weighted-knn
@@ -859,7 +677,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-The two classifiers often produce similar decision boundaries. Nevertheless, noticeable differences appear near the class boundaries.
+The two classifiers in @fig-weighted-knn produce similar decision boundaries, with differences near the class boundaries.
 
 With **uniform voting**, every neighbor contributes equally, regardless of its distance.
 
@@ -873,25 +691,7 @@ Distance weighting is particularly useful when the selected value of $k$ is rela
 In such cases, some of the neighbors may be considerably farther away than others. Assigning larger weights to nearby observations helps preserve local information while still benefiting from a larger neighborhood.
 :::
 
-The choice between uniform and distance-weighted voting should be treated as another hyperparameter and evaluated using cross-validation.
-
-For example, the two alternatives can be compared as follows.
-
-```{python}
-#| label: compare-weighting
-
-from sklearn.model_selection import cross_val_score
-
-uniform_scores = cross_val_score(KNeighborsClassifier(n_neighbors=best_k, weights="uniform"), X_knn_train, y_knn_train, cv=5)
-
-distance_scores = cross_val_score(KNeighborsClassifier(n_neighbors=best_k, weights="distance"), X_knn_train, y_knn_train, cv=5)
-
-print( f"Uniform weights:  {uniform_scores.mean():.3f}")
-
-print(f"Distance weights: {distance_scores.mean():.3f}")
-```
-
-There is no universally superior weighting scheme. The preferred choice depends on the characteristics of the dataset and should therefore be selected empirically through model validation.
+There is no universally superior weighting scheme. The joint grid search above selects it together with $k$ and distance rather than fixing the other choices first.
 
 
 ## Radius Neighbors Classification
@@ -908,7 +708,7 @@ $$
 
 are considered neighbors, where $r$ is a user-defined radius.
 
-The following figure illustrates this idea.
+@fig-radius-neighborhood illustrates this fixed geometric radius.
 
 ```{python}
 #| label: fig-radius-neighborhood
@@ -945,6 +745,7 @@ ax.scatter(
     class0[:,0],
     class0[:,1],
     s=55,
+    marker="o",
     label="Class 0"
 )
 
@@ -952,6 +753,7 @@ ax.scatter(
     class1[:,0],
     class1[:,1],
     s=55,
+    marker="^",
     label="Class 1"
 )
 
@@ -996,31 +798,34 @@ ax.grid(alpha=0.3)
 plt.show()
 ```
 
-Unlike k-nearest neighbors, the number of observations contributing to each prediction is **not fixed**.
-
-The neighborhood depends entirely on the local density of the data.
+Unlike k-nearest neighbors, the number of observations contributing to each prediction is **not fixed**. The geometric radius remains fixed in the scaled feature space; its cardinality varies with the empirical arrangement and sampling density of the training observations.
 
 - Dense regions may contain many neighbors inside the radius.
 
 - Sparse regions may contain only a few neighbors.
 
-The algorithm implemented in Scikit-Learn is `RadiusNeighborsClassifier`.
+It is possible for a query to have no neighbors at all. With the default `outlier_label=None`, `predict()` raises an error for such a query. Setting `outlier_label` to a known label or `"most_frequent"` forces a fallback prediction, but can hide that the model has no local evidence. In applications where abstention is allowed, inspect `radius_neighbors()` and return an explicit "no prediction" status for empty neighborhoods instead of silently assigning a class.
+
+The algorithm implemented in Scikit-Learn is `RadiusNeighborsClassifier`. Because a radius has meaning only relative to feature units, scaling belongs inside its pipeline too.
 
 ```{python}
 #| label: radius-neighbors-model
 
 from sklearn.neighbors import RadiusNeighborsClassifier
 
-radius_clf = RadiusNeighborsClassifier(
-    radius=0.40,
-    weights="uniform",
-    outlier_label="most_frequent"
-)
+radius_pipeline = Pipeline([
+    ("scaler", StandardScaler()),
+    ("radius", RadiusNeighborsClassifier(
+        radius=0.80,
+        weights="uniform",
+        outlier_label="most_frequent"
+    ))
+])
 
-radius_clf.fit(X_knn_train, y_knn_train)
+_ = radius_pipeline.fit(X_knn_train, y_knn_train)
 ```
 
-The resulting decision boundary is shown below.
+The resulting decision boundary is shown in @fig-radius-neighbors-boundary.
 
 ```{python}
 #| label: fig-radius-neighbors-boundary
@@ -1032,7 +837,9 @@ The resulting decision boundary is shown below.
 
 fig, ax = plt.subplots(figsize=(6,5))
 
-plot_decision_boundary(radius_clf, X_knn_train, y_knn_train, ax, "Radius Neighbors")
+plot_decision_boundary(
+    radius_pipeline, X_knn_train, y_knn_train, ax, "Radius Neighbors"
+)
 
 plt.show()
 ```
@@ -1043,7 +850,7 @@ The main conceptual difference between the two nearest-neighbor algorithms is su
 |:-------------------|:-----------------|
 | Fixed number of neighbors | Fixed search radius |
 | Number of neighbors is always $k$ | Number of neighbors varies |
-| Neighborhood size adapts to the chosen $k$ | Neighborhood size adapts to the local data density |
+| Geometric reach varies to obtain $k$ observations | Geometric reach is always $r$ |
 
 Choosing the radius involves the same bias-variance tradeoff observed for $k$.
 
@@ -1060,30 +867,42 @@ Consequently, the radius should also be regarded as a hyperparameter and selecte
 
 from sklearn.model_selection import GridSearchCV
 
-param_grid = {
-    "radius": np.linspace(0.2,1.2,11)
+radius_grid = {
+    "radius__radius": np.linspace(0.3, 1.5, 9),
+    "radius__weights": ["uniform", "distance"]
 }
 
-grid = GridSearchCV(RadiusNeighborsClassifier(outlier_label="most_frequent"),
-    param_grid,
-    cv=5,
+radius_search = GridSearchCV(
+    radius_pipeline,
+    radius_grid,
+    cv=classification_cv,
     scoring="accuracy"
 )
 
-grid.fit(X_knn_train, y_knn_train)
+_ = radius_search.fit(X_knn_train, y_knn_train)
 
-print("Best radius:", grid.best_params_["radius"])
-
-print("Mean CV accuracy:", f"{grid.best_score_:.3f}")
+print("Best parameters:", radius_search.best_params_)
+print("Mean CV accuracy:", f"{radius_search.best_score_:.3f}")
 ```
 
 ::: {.callout-note}
 ## When should Radius Neighbors be preferred?
 
-Radius Neighbors is particularly useful when the density of observations varies considerably across the feature space.
-
-Rather than forcing every prediction to use exactly the same number of neighbors, the algorithm adapts naturally by considering all observations located within a predefined distance. In dense regions, more observations contribute to the prediction, while in sparse regions, fewer neighbors are used.
+Radius Neighbors can be useful when a fixed notion of geometric proximity is meaningful. It does not adapt its radius to density: it uses the chosen scaled radius everywhere, resulting in more sampled observations in dense regions, fewer in sparse regions, and potentially none outside the training support.
 :::
+
+The weighted and radius sections above were training-only demonstrations; they did not inspect the test set. After completing all classification model development, we evaluate the selected k-NN pipeline on the independent test set exactly once:
+
+```{python}
+#| label: final-knn-test-performance
+
+best_pipeline = grid_search.best_estimator_
+test_accuracy = best_pipeline.score(X_knn_test, y_knn_test)
+
+print(f"Final test accuracy: {test_accuracy:.3f}")
+```
+
+The test result estimates performance after the complete model-selection procedure. Looking at it repeatedly and revising the grid would turn the test set into validation data and make that estimate optimistic.
 
 ## k-Nearest Neighbors Regression
 
@@ -1094,7 +913,7 @@ The fundamental idea remains unchanged. Given a new observation, the algorithm f
 Suppose that the $k$ nearest neighbors of a query point $\mathbf{x}$ have response values
 
 $$
-y_1\, y_2\, \ldots\, y_k\.
+y_1,\ y_2,\ \ldots,\ y_k.
 $$
 
 The prediction is computed as
@@ -1123,17 +942,20 @@ y_reg = (np.sin(X_reg).ravel() + 0.25 * np.random.randn(150))
 X_reg_train, X_reg_test, y_reg_train, y_reg_test = train_test_split(X_reg, y_reg, test_size=0.25, random_state=42)
 ```
 
-The following example fits a k-nearest neighbors regressor using five neighbors.
+The following training-only illustration fits a scaled k-nearest neighbors regressor using five neighbors. It does not inspect the regression test set.
 
 ```{python}
 #| label: knn-regressor
 
-knn_reg = KNeighborsRegressor(n_neighbors=5)
+regression_pipeline = Pipeline([
+    ("scaler", StandardScaler()),
+    ("knn", KNeighborsRegressor(n_neighbors=5))
+])
 
-knn_reg.fit(X_reg_train, y_reg_train)
+_ = regression_pipeline.fit(X_reg_train, y_reg_train)
 ```
 
-The fitted regression function is shown below.
+The fitted regression function is shown in @fig-knn-regression.
 
 ```{python}
 #| label: fig-knn-regression
@@ -1149,7 +971,7 @@ X_plot = np.linspace(
     500
 ).reshape(-1,1)
 
-y_plot = knn_reg.predict(X_plot)
+y_plot = regression_pipeline.predict(X_plot)
 
 fig, ax = plt.subplots(figsize=(8,5))
 
@@ -1185,7 +1007,7 @@ As in classification, the neighborhood size controls the flexibility of the regr
 
 - Larger values generate smoother regression curves because each prediction averages a greater number of neighboring responses.
 
-The following figure illustrates this effect.
+@fig-knn-regression-k illustrates this effect using only training data.
 
 ```{python}
 #| label: fig-knn-regression-k
@@ -1204,11 +1026,9 @@ fig, axes = plt.subplots(
 
 for ax, k in zip(axes, [1, 5, 25]):
 
-    model = KNeighborsRegressor(
-        n_neighbors=k
-    )
+    model = clone(regression_pipeline).set_params(knn__n_neighbors=k)
 
-    model.fit(
+    _ = model.fit(
         X_reg_train,
         y_reg_train
     )
@@ -1243,7 +1063,56 @@ The same bias-variance tradeoff observed in classification also appears in regre
 
 - Large values of $k$ reduce variance by averaging many neighboring responses, but excessive smoothing may lead to underfitting.
 
-Consequently, the value of $k$ should also be regarded as a hyperparameter and selected using cross-validation.
+Consequently, the value of $k$ should also be regarded as a hyperparameter and selected with a validation holdout or cross-validation. Cross-validation uses limited data more efficiently; a sufficiently large validation holdout can be cheaper. Neither may use the final test set.
+
+For regression, model selection must use a regression metric. The next search minimizes mean absolute error through the `neg_mean_absolute_error` scoring convention and uses a named, shuffled `KFold`. It jointly selects neighborhood size, weighting, and Minkowski `p` on the regression training set.
+
+```{python}
+#| label: knn-regression-grid-search
+
+from sklearn.model_selection import KFold
+
+regression_cv = KFold(n_splits=5, shuffle=True, random_state=42)
+regression_grid = {
+    "knn__n_neighbors": range(1, 31),
+    "knn__weights": ["uniform", "distance"],
+    "knn__metric": ["minkowski"],
+    "knn__p": [1, 2]
+}
+
+regression_search = GridSearchCV(
+    regression_pipeline,
+    regression_grid,
+    cv=regression_cv,
+    scoring="neg_mean_absolute_error",
+    n_jobs=-1,
+    refit=True
+)
+
+_ = regression_search.fit(X_reg_train, y_reg_train)
+
+print("Best parameters:", regression_search.best_params_)
+print(f"Best mean CV MAE: {-regression_search.best_score_:.3f}")
+```
+
+After all choices are fixed, the regression test set is evaluated once. MAE is the average absolute error in target units, RMSE penalizes large errors more strongly, and $R^2$ compares squared error with the test-set mean baseline. Lower MAE and RMSE are better; $R^2=1$ is perfect, $R^2=0$ matches that baseline, and $R^2$ can be negative.
+
+```{python}
+#| label: final-knn-regression-test-performance
+
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+best_regression_pipeline = regression_search.best_estimator_
+y_reg_test_pred = best_regression_pipeline.predict(X_reg_test)
+
+test_mae = mean_absolute_error(y_reg_test, y_reg_test_pred)
+test_rmse = mean_squared_error(y_reg_test, y_reg_test_pred) ** 0.5
+test_r2 = r2_score(y_reg_test, y_reg_test_pred)
+
+print(f"Final test MAE:  {test_mae:.3f}")
+print(f"Final test RMSE: {test_rmse:.3f}")
+print(f"Final test R^2:  {test_r2:.3f}")
+```
 
 ::: {.callout-note}
 ## Classification versus Regression
@@ -1261,18 +1130,14 @@ Everything else—the distance metric, neighborhood search, and hyperparameter t
 
 ## Computational Complexity and Practical Considerations
 
-One of the main advantages of the k-nearest neighbors algorithm is its simplicity. Unlike many machine learning models, k-NN does not estimate coefficients, optimize an objective function, or build a predictive model during training.
-
-Instead, the training phase simply stores the training observations.
-
-For this reason, the computational cost of training is extremely low.
+One of the main advantages of k-NN is its simplicity. It does not estimate a parametric prediction equation. Fitting always validates and stores the data, however, and tree-based search strategies also build an index. Its cost is therefore low for brute-force search but not literally zero.
 
 | Phase | Computational cost |
 |:------|:-------------------|
-| Training | Very low |
+| Training | Usually low; index construction can add work |
 | Prediction | Potentially high |
 
-The computational burden is shifted almost entirely to the prediction stage. Every time a new observation must be classified or predicted, its distance to the training observations must be computed.
+Much of the computational burden is shifted to prediction. Brute-force search computes distances to all training observations; tree methods may avoid many of those comparisons.
 
 If the training dataset contains $n$ observations and $p$ predictor variables, a straightforward nearest-neighbor search requires approximately
 
@@ -1282,7 +1147,7 @@ $$
 
 operations for each prediction.
 
-Consequently, prediction time increases linearly with the size of the training set.
+Thus brute-force prediction scales linearly with training-set size per query, before neighbor selection and aggregation costs. Actual runtime also depends on batching, hardware, data representation, metric, and implementation.
 
 ### Efficient Neighbor Search
 
@@ -1299,15 +1164,15 @@ The available search strategies are summarized below.
 | `"brute"` | Computes the distance from the query point to every training observation. |
 | `"kd_tree"` | Organizes the observations using a k-dimensional tree to reduce the search space. |
 | `"ball_tree"` | Uses nested hyperspheres to partition the feature space efficiently. |
-| `"auto"` | Automatically selects the most appropriate algorithm for the dataset. |
+| `"auto"` | Chooses among the implemented strategies using Scikit-Learn heuristics. |
 
-In most practical applications, the default option
+The default option
 
 ```python
 algorithm="auto"
 ```
 
-is recommended because Scikit-Learn automatically selects the most efficient search strategy.
+is a reasonable starting point, but it does not benchmark every strategy or guarantee the fastest one. Sparse input can force brute search, and tree pruning often loses effectiveness as dimensionality grows. For latency-sensitive or large applications, benchmark supported algorithms on representative fit and query workloads; approximate-neighbor libraries may be needed beyond Scikit-Learn's exact searches [@scikitLearn2025].
 
 
 ### The Curse of Dimensionality
@@ -1322,10 +1187,12 @@ As dimensionality increases,
 - distances between observations become more similar;
 - identifying meaningful nearest neighbors becomes more difficult.
 
-The following conceptual illustration summarizes this effect.
+@fig-knn-dimensionality summarizes this effect conceptually.
 
 ```{mermaid}
 %%| echo: false
+%%| label: fig-knn-dimensionality
+%%| fig-cap: "Conceptual effect of increasing dimensionality on nearest-neighbor information."
 
 flowchart LR
 
@@ -1342,7 +1209,7 @@ B --> E["Reliable nearest neighbors"]
 D --> F["Neighborhood becomes less informative"]
 ```
 
-As a result, the notion of "nearest" gradually loses its meaning in high-dimensional spaces.
+As summarized in @fig-knn-dimensionality, the notion of "nearest" can become less informative in high-dimensional spaces. This is a tendency rather than a universal threshold; sample size, feature relevance, sparsity, and metric all matter.
 
 ### Feature Scaling
 
@@ -1362,8 +1229,6 @@ Common preprocessing techniques include
 
 When cross-validation is used, scaling should be incorporated into a **Pipeline** to avoid data leakage.
 
----
-
 ### Advantages and Limitations
 
 The main strengths and weaknesses of k-nearest neighbors are summarized below.
@@ -1375,8 +1240,6 @@ The main strengths and weaknesses of k-nearest neighbors are summarized below.
 | Naturally handles nonlinear decision boundaries | Sensitive to feature scaling |
 | Works for both classification and regression | Performance deteriorates in high-dimensional spaces |
 | Easy to interpret | Requires storing the complete training dataset |
-
----
 
 ::: {.callout-tip}
 ## When should k-nearest neighbors be used?
@@ -1390,3 +1253,77 @@ k-NN is particularly effective when
 
 For very large datasets or problems involving hundreds or thousands of features, tree-based ensemble methods or gradient boosting algorithms often provide better scalability and predictive performance.
 :::
+
+## Practical Workflow
+
+1. Define the prediction target, deployment population, and an appropriate classification or regression metric.
+2. Create the final test split immediately. Use stratification for classification when appropriate, and use grouped or time-aware splitting when observations are not independent and identically distributed.
+3. Lock the test set. Do not inspect its values, plot it, preprocess it separately, or use its score to revise choices.
+4. Put scaling and the nearest-neighbor estimator in one pipeline. Add any imputation or feature transformation to that same pipeline.
+5. Use a named CV splitter on the training data to jointly tune neighborhood size, weighting, and distance. Ensure no candidate $k$ exceeds the smallest CV training fold.
+6. Inspect CV means and variability, runtime, and application-relevant failure modes. For radius neighbors, also measure the empty-neighborhood rate.
+7. Let `GridSearchCV(refit=True)` refit the selected pipeline on all training data.
+8. Evaluate the locked test set once with prespecified metrics, then report the complete procedure and selected parameters.
+
+## Common Failures
+
+::: {.callout-warning}
+## Scaling before the split or cross-validation
+
+Fitting a scaler on all observations leaks validation or test information. Fit every data-dependent transformation inside the pipeline.
+:::
+
+::: {.callout-warning}
+## Revisiting the test set
+
+Comparing grids, plots, or preprocessing choices after seeing test performance makes the test set part of model selection. Create a new untouched holdout if this has already happened.
+:::
+
+::: {.callout-warning}
+## Tuning one choice at a time
+
+The best $k$ can change with scaling, weights, and metric. Tune interacting choices jointly within a computationally defensible grid.
+:::
+
+::: {.callout-warning}
+## Treating distance as meaningful by default
+
+Irrelevant features, mixed units, duplicated rows, and high dimensionality can make neighborhoods misleading even when code runs successfully.
+:::
+
+::: {.callout-warning}
+## Hiding empty radius neighborhoods
+
+`outlier_label="most_frequent"` guarantees an output but may conceal unsupported queries. Monitor empties and use explicit abstention when the application permits it.
+:::
+
+::: {.callout-warning}
+## Reporting only accuracy or $R^2$
+
+Accuracy can hide class-specific errors. $R^2$ does not express error in target units. Select metrics that match costs and report complementary diagnostics such as confusion measures or MAE and RMSE.
+:::
+
+## Chapter Summary
+
+- k-NN predicts from a fixed number of nearby stored observations; radius neighbors use a fixed geometric radius and therefore a variable number of observations.
+- Fitting stores data and may construct a search index, while prediction performs the local search and aggregation.
+- The default Scikit-Learn configuration uses Minkowski distance with `p=2`, which is equivalent to Euclidean distance.
+- Scaling must be fitted inside a pipeline because units directly determine neighborhoods.
+- Neighborhood size, weights, and distance interact and should be selected jointly using only training-fold validation.
+- Uniform and distance-weighted votes can tie; exact zero-distance matches receive special handling under inverse-distance weighting.
+- Radius methods need an explicit policy for empty neighborhoods, including a fallback label or abstention.
+- Regression requires a validation metric for selection and a one-time test evaluation with interpretable measures such as MAE, RMSE, and $R^2$.
+- Exact neighbor search can be costly, and both statistical and computational performance often deteriorate as dimensionality grows.
+
+## Exercises
+
+1. Reproduce the classification grid search with `n_neighbors=range(1, 21)` and compare its selected model, CV score, and runtime with the chapter's `1..40` search. Do not reevaluate the test set.
+2. Replace `accuracy` with balanced accuracy on an imbalanced synthetic dataset. Explain how the selected hyperparameters change.
+3. Add `p=3` to the Minkowski grid. State why it remains a valid metric and compare CV performance and runtime.
+4. Construct a binary example with an exact uniform-vote tie. Verify how `classes_` ordering affects the prediction.
+5. Create duplicated observations at zero distance with conflicting labels. Compare uniform and distance weighting and explain Scikit-Learn's result.
+6. For the radius pipeline, calculate the proportion of validation queries with no neighbors across the radius grid. Compare a fallback label with an explicit abstention policy.
+7. Compare `algorithm="brute"`, `"kd_tree"`, `"ball_tree"`, and `"auto"` on low- and moderate-dimensional synthetic data. Measure fit and prediction time without assuming `"auto"` wins.
+8. Repeat the regression search with RMSE rather than MAE as the selection criterion. Compare the selected parameters using training-fold CV only.
+9. Build a regression holdout workflow instead of cross-validation. Report holdout MAE, RMSE, and $R^2$, and discuss the tradeoff in estimate stability and runtime.
+10. Add irrelevant noise features to the moons data and examine how scaling, CV accuracy, and selected distance change as dimensionality increases.

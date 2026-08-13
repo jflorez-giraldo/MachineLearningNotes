@@ -6,43 +6,50 @@ execute:
   enabled: true
 ---
 
+{{< chapter-actions >}}
+
 ## Introduction
 
-Supervised learning assumes that every training observation has a target label. In many real applications, however, collecting predictors is inexpensive while obtaining reliable labels requires human judgment, laboratory tests, or expert review. A medical image may be easy to store but expensive to diagnose, and millions of documents may be available even though only a small fraction have been categorized.
+Supervised learning requires observations with known target labels. In many applications, collecting predictors is inexpensive while obtaining labels requires human judgment, laboratory tests, or expert review. A hospital may store many medical images but have diagnoses for only a small subset. A company may collect millions of documents while manually categorizing only a few hundred.
 
-**Semi-supervised learning** addresses this setting by combining a small labeled set
+**Semi-supervised learning** studies how a small labeled set and a larger unlabeled set can be used together for a predictive task. We denote them by
 
 $$
 \mathcal{D}_L
 =
-\left\{(\mathbf{x}_i,y_i)\right\}_{i=1}^{n_L}
+\left\{(\mathbf{x}_i,y_i):i\in L\right\}
 $$
 
-with a larger unlabeled set
+and
 
 $$
 \mathcal{D}_U
 =
-\left\{\mathbf{x}_i\right\}_{i=n_L+1}^{n_L+n_U},
+\left\{\mathbf{x}_i:i\in U\right\},
 $$
 
-where typically $n_U\gg n_L$. The objective is not merely to discover structure in $\mathcal{D}_U$, but to use that structure to improve a predictive task defined by the available labels.
+where $L$ and $U$ are the indices of the labeled and unlabeled observations, respectively. Usually, $L$ is much smaller than $U$.
 
-Unlabeled data do not automatically improve a model. They are useful only when the geometry or density of the predictors is related to the target classes. If this relationship is weak, semi-supervised learning can provide no benefit or can even reduce predictive performance.
+This chapter develops one concrete strategy. K-Means first organizes the training observations into clusters. A person labels one representative observation from each cluster, and those labels may then be assigned to other observations in the same cluster. This sequence separates two decisions:
+
+- **representative acquisition:** deciding which observations a person should label;
+- **label propagation:** assigning unverified labels to additional observations using the discovered clusters.
+
+The unlabeled observations help only if the clusters are related to the target classes. If that relationship is weak, propagated labels can introduce errors and reduce predictive performance.
 
 ::: {.callout-note}
 ## Learning objectives
 
 After completing this chapter, you should be able to:
 
-- distinguish supervised, unsupervised, semi-supervised, transductive, and inductive learning;
-- explain the smoothness, cluster, and manifold assumptions;
+- explain how K-Means assigns observations to centroids;
+- compare random and K-Means++ initialization and explain the role of `n_init`;
+- interpret inertia, the elbow method, and the silhouette coefficient;
+- distinguish cluster identifiers, verified labels, and pseudo-labels;
 - use K-Means to select representative observations for labeling;
-- propagate labels through clusters while controlling pseudo-label noise;
-- explain graph-based label propagation and label spreading;
-- train `LabelPropagation`, `LabelSpreading`, and `SelfTrainingClassifier` models;
-- diagnose error amplification in pseudo-labeling workflows;
-- design a semi-supervised evaluation without test-set leakage.
+- propagate labels within clusters and diagnose propagation errors;
+- explain the tradeoff between pseudo-label coverage and reliability;
+- evaluate a semi-supervised procedure without using the test set for model selection.
 :::
 
 ```{python}
@@ -54,134 +61,26 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from sklearn.cluster import KMeans
-from sklearn.datasets import load_digits, make_blobs, make_moons
+from sklearn.datasets import load_digits, make_blobs
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, silhouette_score
 from sklearn.model_selection import StratifiedShuffleSplit, train_test_split
-from sklearn.semi_supervised import (
-    LabelPropagation,
-    LabelSpreading,
-    SelfTrainingClassifier
-)
 ```
-
-## Learning Settings and Terminology
-
-The main learning settings differ in the information available during training.
-
-| Setting | Training information | Main objective |
-|:---|:---|:---|
-| Supervised | Predictors and labels | Predict labels for new observations |
-| Unsupervised | Predictors only | Discover structure or representations |
-| Semi-supervised | Few labels and many unlabeled observations | Improve a supervised task using unlabeled structure |
-| Active learning | A model can request selected labels from an oracle | Spend a labeling budget efficiently |
-
-Selecting representative observations and asking a person to label them is an **active acquisition strategy**. Automatically assigning labels to additional observations after those labels are obtained is a **semi-supervised strategy**. A practical system may combine both ideas, but their effects should be reported separately.
-
-### Inductive and Transductive Learning
-
-An **inductive** model learns a decision function that can be applied to observations not seen during training. A **transductive** method focuses on inferring labels for the particular unlabeled observations available during training.
-
-Graph-based propagation is naturally transductive because it builds relationships among the available observations. Scikit-Learn's graph estimators also implement `predict()` for new observations, but `transduction_` specifically contains inferred labels for the fitted training pool and must not be interpreted as test predictions.
-
-### When Can Unlabeled Data Help?
-
-Semi-supervised methods usually rely on one or more structural assumptions [@chapelle2006semi]:
-
-- **Smoothness assumption:** nearby observations are likely to have similar labels.
-- **Cluster assumption:** observations in the same high-density region are likely to share a label, and decision boundaries should pass through low-density regions.
-- **Manifold assumption:** high-dimensional observations lie near a lower-dimensional structure on which labels vary smoothly.
-
-The following synthetic example illustrates the cluster assumption. Only a small subset of observations is labeled, but the unlabeled observations reveal the shape of the two classes.
-
-```{python}
-#| label: fig-semi-supervised-setting
-#| fig-cap: "A small labeled subset and a larger unlabeled pool reveal different amounts of information about the data geometry."
-#| fig-width: 10
-#| fig-height: 4.5
-#| code-fold: true
-#| code-summary: "Show code"
-
-X_setting, y_setting = make_moons(
-    n_samples=500,
-    noise=0.12,
-    random_state=42
-)
-
-rng = np.random.default_rng(42)
-labeled_setting_indices = np.concatenate([
-    rng.choice(np.flatnonzero(y_setting == class_id), size=5, replace=False)
-    for class_id in np.unique(y_setting)
-])
-
-is_labeled_setting = np.zeros(len(X_setting), dtype=bool)
-is_labeled_setting[labeled_setting_indices] = True
-
-fig, axes = plt.subplots(1, 2, figsize=(10, 4.5), sharex=True, sharey=True)
-
-axes[0].scatter(
-    X_setting[labeled_setting_indices, 0],
-    X_setting[labeled_setting_indices, 1],
-    c=y_setting[labeled_setting_indices],
-    cmap="coolwarm",
-    s=70,
-    edgecolor="black"
-)
-axes[0].set_title("Only the labeled observations")
-
-axes[1].scatter(
-    X_setting[~is_labeled_setting, 0],
-    X_setting[~is_labeled_setting, 1],
-    color="#BFC9CA",
-    s=18,
-    alpha=0.7,
-    label="Unlabeled"
-)
-axes[1].scatter(
-    X_setting[is_labeled_setting, 0],
-    X_setting[is_labeled_setting, 1],
-    c=y_setting[is_labeled_setting],
-    cmap="coolwarm",
-    s=70,
-    edgecolor="black",
-    label="Labeled"
-)
-axes[1].set_title("Labeled and unlabeled observations")
-axes[1].legend()
-
-for ax in axes:
-    ax.set_xlabel("Feature 1")
-    ax.set_ylabel("Feature 2")
-
-plt.show()
-```
-
-::: {.callout-warning}
-If different classes overlap within the same high-density region, or if the unlabeled pool comes from a different population, these assumptions fail. In that case, propagating labels can create **negative transfer** and perform worse than using the labeled observations alone.
-:::
 
 ## K-Means as a Structural Tool
 
-K-Means is an unsupervised clustering algorithm that partitions observations into $K$ groups. It is not itself a classifier, and its cluster identifiers must not be confused with target labels.
+K-Means is an unsupervised clustering algorithm. It uses only the predictors and partitions the observations into $K$ groups. A **cluster** is a group discovered from predictor similarity; a **class** is a target category supplied by the problem. Cluster number 2, for example, does not automatically mean class 2.
 
-Given centroids $\boldsymbol{\mu}_1,\ldots,\boldsymbol{\mu}_K$, K-Means minimizes the **inertia** or within-cluster sum of squares:
+### Centroids and Assignments
 
-$$
-J
-=
-\sum_{i=1}^{n}
-\min_{1\leq k\leq K}
-\left\|
-\mathbf{x}_i-\boldsymbol{\mu}_k
-\right\|_2^2.
-$$
+Each cluster is summarized by a **centroid**, the coordinate-wise mean of the observations currently assigned to that cluster. Given $K$ centroids, K-Means assigns every observation to its nearest centroid under Euclidean distance.
 
 The algorithm alternates between two operations:
 
 1. Assign every observation to its nearest centroid.
 2. Replace every centroid with the mean of its assigned observations.
 
-These steps continue until the assignments stabilize or the centroid movement becomes sufficiently small. The procedure converges, but it can converge to a local optimum. Scikit-Learn uses K-Means++ initialization by default [@arthur2007kmeans]; an explicit integer `n_init` runs the complete algorithm several times and retains the solution with the lowest inertia.
+The assignments can change after the centroids move, so the two operations repeat until the assignments stabilize or the centroid movement becomes sufficiently small.
 
 ```{python}
 #| label: kmeans-structural-example
@@ -209,11 +108,13 @@ kmeans_demo = KMeans(
 cluster_assignments = kmeans_demo.fit_predict(X_blobs)
 ```
 
-K-Means produces a Voronoi partition: every location is assigned to its nearest centroid. `transform()` provides the distance from each observation to every centroid and is useful for selecting representative observations.
+`fit_predict()` fits K-Means and returns one cluster identifier for each observation. After fitting, `cluster_centers_` contains the centroid coordinates and `labels_` contains the same assignments returned by `fit_predict()`.
+
+Every location in the predictor space can also be assigned to its nearest centroid. The resulting regions are called **Voronoi regions**. A boundary between two regions contains locations that are equally close to the corresponding centroids.
 
 ```{python}
 #| label: fig-kmeans-structure
-#| fig-cap: "K-Means discovers centroid-based structure without using class labels."
+#| fig-cap: "K-Means partitions the predictor space according to the nearest centroid."
 #| fig-width: 11
 #| fig-height: 4.5
 #| code-fold: true
@@ -250,7 +151,7 @@ axes[1].scatter(
     color="black",
     edgecolor="white"
 )
-axes[1].set_title("Clusters, centroids, and Voronoi regions")
+axes[1].set_title("Clusters and nearest-centroid regions")
 
 for ax in axes:
     ax.set_xlabel("Feature 1")
@@ -259,17 +160,178 @@ for ax in axes:
 plt.show()
 ```
 
+### Inertia
+
+K-Means needs a numerical criterion for comparing different centroid locations. For each observation, it computes the distance to its assigned centroid, squares that distance, and then adds the squared distances across all observations. This sum is called **inertia**.
+
+If $c(i)$ is the cluster assigned to observation $i$ and $\boldsymbol{\mu}_{c(i)}$ is that cluster's centroid, the inertia is
+
+$$
+J
+=
+\sum_{i=1}^{n}
+\left\|
+\mathbf{x}_i-\boldsymbol{\mu}_{c(i)}
+\right\|_2^2.
+$$
+
+The quantity $\|\mathbf{x}_i-\boldsymbol{\mu}_{c(i)}\|_2$ is the Euclidean distance from observation $i$ to its centroid. Squaring gives greater weight to distant observations. A lower inertia therefore indicates that observations are, collectively, closer to their assigned centroids.
+
+In Scikit-Learn, the final value is available as `inertia_`:
+
+```{python}
+#| label: inspect-kmeans-inertia
+
+pd.Series({
+    "Number of observations": len(X_blobs),
+    "Number of clusters": kmeans_demo.n_clusters,
+    "Inertia": kmeans_demo.inertia_
+}).round(3)
+```
+
+Low inertia does not imply that the clusters match the target classes. K-Means never sees those classes. Inertia only measures compactness around the centroids.
+
+### Initialization and Convergence
+
+The final clustering can depend on the initial centroid locations. K-Means reduces inertia during its assignment and update steps, but it can stop at a **local optimum**: a solution that cannot be improved by the next K-Means step even though another initialization could produce lower inertia.
+
+With **random initialization**, K-Means selects $K$ observations uniformly as its initial centroids. Several selected observations can come from the same dense region, leaving another region without a nearby starting centroid. The assignment and update steps may correct that configuration, but they may also converge to a poor local optimum.
+
+**K-Means++** spreads the initial centroids more deliberately [@arthur2007kmeans]. It selects the first centroid uniformly from the observations. For every subsequent selection, let $D(\textbf{x})$ be the distance from observation $\textbf{x}$ to its nearest centroid already selected. The original K-Means++ procedure samples the next centroid with probability
+
+$$
+P(\textbf{x}\text{ is selected})
+=
+\frac{D(\textbf{x})^2}
+{\sum_{j=1}^{n}D(\textbf{x}_j)^2}.
+$$
+
+Observations far from the existing centroids are therefore more likely to be selected, although the result remains stochastic. Scikit-Learn uses a *greedy K-Means++* variant that evaluates several candidates at each selection and retains the best candidate. This generally provides a better starting configuration and faster convergence, but it does not guarantee the global minimum.
+
+The following experiment isolates the effect of initialization. It uses the same synthetic observations and the same 100 random seeds for both methods. Each fit has `n_init=1`; allowing several restarts here would combine the effect of the initialization rule with the benefit of repeated attempts.
+
+```{python}
+#| label: compare-kmeans-initialization
+
+X_initialization, _ = make_blobs(
+    n_samples=1_000,
+    centers=8,
+    cluster_std=[1.20, 0.50, 0.70, 1.30, 0.60, 0.90, 1.10, 0.55],
+    random_state=42
+)
+
+initialization_records = []
+
+for seed in range(100):
+    for method in ["random", "k-means++"]:
+        fitted_kmeans = KMeans(
+            n_clusters=8,
+            init=method,
+            n_init=1,
+            random_state=seed
+        ).fit(X_initialization)
+
+        initialization_records.append({
+            "Seed": seed,
+            "Initialization": method,
+            "Final inertia": fitted_kmeans.inertia_,
+            "Iterations": fitted_kmeans.n_iter_
+        })
+
+initialization_results = pd.DataFrame(initialization_records)
+```
+
+```{python}
+#| label: tbl-kmeans-initialization-summary
+#| tbl-cap: "Final inertia and iterations across 100 matched single-start fits."
+
+initialization_summary = (
+    initialization_results
+    .groupby("Initialization", sort=False)
+    .agg(
+        median_inertia=("Final inertia", "median"),
+        inertia_q1=("Final inertia", lambda values: values.quantile(0.25)),
+        inertia_q3=("Final inertia", lambda values: values.quantile(0.75)),
+        worst_inertia=("Final inertia", "max"),
+        mean_iterations=("Iterations", "mean")
+    )
+    .rename(columns={
+        "median_inertia": "Median inertia",
+        "inertia_q1": "Inertia Q1",
+        "inertia_q3": "Inertia Q3",
+        "worst_inertia": "Worst inertia",
+        "mean_iterations": "Mean iterations"
+    })
+)
+
+initialization_summary.round(1)
+```
+
+```{python}
+#| label: fig-kmeans-initialization-comparison
+#| fig-cap: "K-Means++ produces more stable single-start solutions and usually converges in fewer iterations in this simulation."
+#| fig-width: 10
+#| fig-height: 4.5
+#| code-fold: true
+#| code-summary: "Show code"
+
+initialization_order = ["random", "k-means++"]
+method_colors = ["#7F8C8D", "#2874A6"]
+fig, axes = plt.subplots(1, 2, figsize=(10, 4.5))
+
+for ax, column, ylabel in [
+    (axes[0], "Final inertia", "Final inertia"),
+    (axes[1], "Iterations", "Iterations to convergence")
+]:
+    values_by_method = [
+        initialization_results.loc[
+            initialization_results["Initialization"] == method,
+            column
+        ]
+        for method in initialization_order
+    ]
+
+    boxes = ax.boxplot(
+        values_by_method,
+        tick_labels=["Random", "K-Means++"],
+        patch_artist=True,
+        widths=0.55,
+        medianprops={"color": "white", "linewidth": 2}
+    )
+
+    for box, color in zip(boxes["boxes"], method_colors):
+        box.set_facecolor(color)
+        box.set_alpha(0.85)
+
+    ax.set_ylabel(ylabel)
+    ax.grid(axis="y", alpha=0.25)
+
+plt.show()
+```
+
+In this simulation, K-Means++ has a lower and tighter distribution of final inertia and needs fewer iterations on average. The paired runs do not imply that K-Means++ must beat random initialization for every seed or dataset. They show that initialization changes both solution quality and computational effort.
+
+The `init` parameter controls how one run begins, whereas `n_init` controls how many complete runs are fitted. Scikit-Learn retains the run with the lowest final inertia. The main examples in this chapter use K-Means++ and set `n_init=10` explicitly, combining informed initialization with several opportunities to avoid a poor local optimum.
+
 ### Choosing the Number of Clusters
 
-Inertia always decreases as $K$ increases, so its absolute minimum cannot select a useful number of clusters. The **elbow method** looks for diminishing improvements. The **silhouette coefficient** also considers separation from neighboring clusters:
+Increasing $K$ gives the algorithm more centroids, so inertia cannot increase and usually decreases. Consequently, choosing the $K$ with the smallest inertia would eventually favor one cluster per observation. The **elbow method** instead looks for a point after which additional clusters provide much smaller reductions in inertia.
+
+The **silhouette coefficient** combines compactness and separation. For observation $i$:
+
+- $a_i$ is its mean distance to the other observations in its own cluster;
+- for every alternative cluster, compute its mean distance to the observations in that cluster;
+- $b_i$ is the smallest of those alternative mean distances.
+
+The coefficient is
 
 $$
 s_i
 =
-\frac{b_i-a_i}{\max(a_i,b_i)},
+\frac{b_i-a_i}{\max(a_i,b_i)}.
 $$
 
-where $a_i$ is the mean distance from observation $i$ to its own cluster and $b_i$ is the mean distance to its nearest alternative cluster. Values near $1$ indicate compact, well-separated assignments; values near $0$ indicate boundary observations; negative values suggest a questionable assignment.
+It ranges from $-1$ to $1$. Values near $1$ indicate that an observation is much closer to its own cluster than to alternatives. Values near $0$ indicate a boundary observation, and negative values suggest that another cluster may be more appropriate. `silhouette_score()` averages $s_i$ over all observations.
 
 ```{python}
 #| label: kmeans-selection-metrics
@@ -293,7 +355,7 @@ for n_clusters in candidate_clusters:
 
 ```{python}
 #| label: fig-kmeans-selection
-#| fig-cap: "Inertia and silhouette score provide complementary, but not definitive, guidance for choosing the number of clusters."
+#| fig-cap: "Inertia and silhouette provide complementary, but not definitive, information about the number of clusters."
 #| fig-width: 10
 #| fig-height: 4.5
 #| code-fold: true
@@ -314,24 +376,34 @@ axes[1].set_title("Silhouette analysis")
 plt.show()
 ```
 
-Neither metric guarantees alignment with the target classes. For representative labeling, $K$ may instead be determined by the labeling budget. It is often useful to create more clusters than classes so that several modes of variation within each class can receive representatives.
+These metrics evaluate geometric clusters, not target classes. In representative labeling, $K$ may instead be determined by the number of observations that can be labeled. It can also be useful to create more clusters than target classes so that different forms of the same class receive separate representatives.
 
 ::: {.callout-warning}
-K-Means is most appropriate for approximately compact, centroid-shaped groups under Euclidean distance. It is sensitive to feature scale, initialization, outliers, unequal cluster sizes, and nonconvex geometry. These limitations directly affect any labels propagated through its clusters.
+K-Means is most appropriate for approximately compact groups that can be summarized by centroids under Euclidean distance. It is sensitive to feature scale, outliers, unequal cluster sizes, and nonconvex shapes. These limitations also affect labels propagated through its clusters.
 :::
+
+## When Can Clusters Help Classification?
+
+The unlabeled observations reveal where predictor values are concentrated. Informally, a **high-density region** is an area containing many observations in a relatively small amount of space. A **low-density region** contains few observations and may separate visible concentrations.
+
+Cluster-based semi-supervised learning relies on the **cluster assumption**: observations grouped in the same concentrated region are likely to share a target class. Under this assumption, one verified label may provide useful information about nearby observations in the same cluster.
+
+The assumption can fail. A cluster may contain several classes, a single class may be divided across several clusters, or Euclidean distance may not reflect meaningful similarity. For handwritten digits, for example, visually different digits can have similar pixel values, while two writing styles of the same digit can be far apart.
+
+The cluster assumption should therefore be treated as a hypothesis about the data, not as a fact guaranteed by K-Means.
 
 ## Experimental Design with Digits
 
-The remaining sections use Scikit-Learn's Digits dataset, which contains $1{,}797$ grayscale images of handwritten digits. Every image has $8\times8=64$ pixel-intensity features and one class label from $0$ to $9$.
+The remaining sections use Scikit-Learn's Digits dataset. It contains $1{,}797$ grayscale images of handwritten digits. Every image has $8\times8=64$ pixel-intensity features and a class label from $0$ to $9$.
 
-The true labels are available because this is a controlled simulation. During semi-supervised training, most of them will be hidden. They may be used afterward to diagnose pseudo-label quality, but never as model inputs or for test-set tuning.
+The true labels are available because this is a controlled educational simulation. Most training labels will be hidden temporarily. Hidden labels may be used afterward to explain how well pseudo-labeling worked, but they must not be supplied to the semi-supervised procedure or used to tune it.
 
 ```{python}
 #| label: load-split-digits
 
 X_digits, y_digits = load_digits(return_X_y=True)
 
-# Pixel intensities range from 0 to 16. This fixed rescaling uses no fitted data.
+# Pixel intensities have a known range from 0 to 16.
 X_digits = X_digits / 16.0
 
 X_digits_train, X_digits_test, y_digits_train, y_digits_test = (
@@ -345,11 +417,11 @@ X_digits_train, X_digits_test, y_digits_train, y_digits_test = (
 )
 ```
 
-The test set is separated before clustering, graph construction, representative selection, or pseudo-labeling. Using unlabeled test predictors in any of these steps would leak information in an inductive evaluation.
+The test set is separated before clustering, representative selection, or pseudo-labeling. Only the training predictors may be used to discover clusters. The test set remains untouched until the procedures and their settings have been fixed.
 
-### Creating a Controlled Label Budget
+### A Controlled Labeling Budget
 
-We simulate a budget of $50$ labels, five from each class. `StratifiedShuffleSplit` uses the hidden labels only to create a controlled educational experiment in which all classes are represented. A real acquisition process cannot stratify unknown labels in advance.
+We simulate a budget of $50$ verified labels, five from each digit class. `StratifiedShuffleSplit` returns indices for a subset that preserves the class proportions. It uses the hidden labels here only to make the educational comparison stable and to ensure that every class is represented. A real labeling process cannot stratify observations whose labels are unknown.
 
 ```{python}
 #| label: create-digits-label-budget
@@ -365,17 +437,16 @@ label_splitter = StratifiedShuffleSplit(
 labeled_indices, _ = next(
     label_splitter.split(X_digits_train, y_digits_train)
 )
-
-y_digits_semi = np.full(len(y_digits_train), -1, dtype=int)
-y_digits_semi[labeled_indices] = y_digits_train[labeled_indices]
 ```
 
 ### Supervised References
 
-The low-label baseline uses only the $50$ available labels. A second model uses every training label and acts as an upper reference for this experiment; it is not a fair semi-supervised competitor because it consumes a much larger labeling budget.
+The first reference classifier uses only the $50$ available labels. It answers a necessary question: how well can the existing supervised method perform without using the unlabeled observations?
+
+A second reference uses all training labels. It provides context for this simulation, but it is not a fair competitor because it consumes many more verified labels. It should not be interpreted as a guaranteed mathematical upper bound.
 
 ```{python}
-#| label: digits-supervised-references
+#| label: fit-digits-reference-models
 
 def make_digits_classifier():
     return LogisticRegression(
@@ -389,29 +460,18 @@ low_label_classifier.fit(
     X_digits_train[labeled_indices],
     y_digits_train[labeled_indices]
 )
-low_label_accuracy = low_label_classifier.score(
-    X_digits_test,
-    y_digits_test
-)
 
 fully_supervised_classifier = make_digits_classifier()
 fully_supervised_classifier.fit(X_digits_train, y_digits_train)
-fully_supervised_accuracy = fully_supervised_classifier.score(
-    X_digits_test,
-    y_digits_test
-)
-
-pd.DataFrame({
-    "Training labels": [n_labeled, len(X_digits_train)],
-    "Test accuracy": [low_label_accuracy, fully_supervised_accuracy]
-}, index=["Low-label baseline", "Fully supervised reference"]).round(3)
 ```
 
-The difference between these results represents an opportunity, not a guarantee: a semi-supervised method may recover part of the gap only if its assumptions are compatible with the data.
+The models have been fitted, but their test results are intentionally postponed. The remaining procedures will be defined before the test set is evaluated.
 
-## Representative Labeling with K-Means
+## Selecting Representative Observations
 
-Randomly selected observations may be redundant or lie in unusual regions. An alternative is to partition the training pool and request one label for the observation closest to each centroid. This uses the same labeling budget but distributes it across the geometry discovered by K-Means.
+A small random labeled sample may contain redundant observations. K-Means offers a simple alternative: partition the training pool into as many clusters as the labeling budget and select the real observation nearest to each centroid.
+
+The centroid itself is an average and may not correspond to an actual image. The selected **representative observation** is the training image closest to that centroid. An **oracle** is the external source that supplies its verified label, such as a human annotator or laboratory test.
 
 ```{python}
 #| label: digits-kmeans-representatives
@@ -429,15 +489,26 @@ representative_indices = np.argmin(digit_cluster_distances, axis=0)
 
 X_representative_digits = X_digits_train[representative_indices]
 
-# In this simulation, the hidden labels play the role of a human oracle.
+# Hidden labels simulate the answers returned by a perfect oracle.
 y_representative_digits = y_digits_train[representative_indices]
 ```
 
-The representative labels are not generated by K-Means. They are supplied by an oracle after K-Means selects which observations should be labeled.
+`fit_transform()` returns a matrix with one row per training observation and one column per centroid. Entry $(i,k)$ is the distance from observation $i$ to centroid $k$. Taking `argmin(..., axis=0)` finds the row with the smallest distance in every centroid column, producing one representative index per cluster.
+
+```{python}
+#| label: inspect-representative-selection
+
+pd.Series({
+    "Training observations": digit_cluster_distances.shape[0],
+    "Centroid columns": digit_cluster_distances.shape[1],
+    "Selected representatives": len(representative_indices),
+    "Digit classes represented": len(np.unique(y_representative_digits))
+})
+```
 
 ```{python}
 #| label: fig-representative-digits
-#| fig-cap: "Fifty representative observations selected by proximity to the K-Means centroids."
+#| fig-cap: "Fifty real training observations selected by proximity to the K-Means centroids."
 #| fig-width: 10
 #| fig-height: 5
 #| code-fold: true
@@ -457,34 +528,25 @@ plt.tight_layout()
 plt.show()
 ```
 
-A classifier trained on these representatives measures the benefit of **label acquisition** alone. It has not yet used pseudo-labels.
+The labels shown above come from the simulated oracle, not from K-Means. Training only on these representatives measures the effect of changing the **acquisition policy** while keeping the same budget of 50 verified labels.
 
 ```{python}
-#| label: train-representative-classifier
+#| label: fit-representative-classifier
 
 representative_classifier = make_digits_classifier()
 representative_classifier.fit(
     X_representative_digits,
     y_representative_digits
 )
-
-representative_accuracy = representative_classifier.score(
-    X_digits_test,
-    y_digits_test
-)
-
-pd.DataFrame({
-    "Label acquisition": ["Controlled random", "K-Means representatives"],
-    "Number of labels": [n_labeled, n_labeled],
-    "Test accuracy": [low_label_accuracy, representative_accuracy]
-}).set_index("Label acquisition").round(3)
 ```
 
-Representative selection often covers the feature space better than a small random sample, but it can favor outliers or visually ambiguous observations. It is an acquisition heuristic, not a guarantee of class balance.
+Representative acquisition can cover the predictor space better than one small random sample, but it does not guarantee class balance. It can select unusual or ambiguous observations because geometric centrality is not the same as class typicality.
 
-## Cluster-Based Label Propagation
+## Propagating Labels Within Clusters
 
-Once a representative has been labeled, its label can be assigned to other observations in the same cluster. If $c(i)$ denotes the cluster of observation $i$ and $r_k$ is the labeled representative of cluster $k$, hard cluster propagation defines
+After the representative of every cluster has been verified, its class label can be assigned to the other observations in that cluster. This chapter calls that procedure **cluster propagation**.
+
+If $c(i)$ is the cluster assigned to observation $i$, and $r_k$ is the verified representative of cluster $k$, the propagated label is
 
 $$
 \widetilde{y}_i
@@ -492,7 +554,7 @@ $$
 y_{r_{c(i)}}.
 $$
 
-The propagated values $\widetilde{y}_i$ are **pseudo-labels**. They are model outputs, not ground truth, and one incorrect representative can contaminate an entire cluster.
+This rule assumes exactly one verified representative for every cluster. The values $\widetilde{y}_i$ assigned to previously unlabeled observations are **pseudo-labels**. They are inferred labels, not verified ground truth. If the representative does not describe the entire cluster, one error can be copied to many observations.
 
 ```{python}
 #| label: propagate-cluster-labels
@@ -503,33 +565,59 @@ for cluster_id in range(n_digit_clusters):
     in_cluster = digits_kmeans.labels_ == cluster_id
     y_cluster_propagated[in_cluster] = y_representative_digits[cluster_id]
 
-cluster_pseudo_label_accuracy = accuracy_score(
-    y_digits_train,
-    y_cluster_propagated
-)
-
 cluster_propagation_classifier = make_digits_classifier()
 cluster_propagation_classifier.fit(
     X_digits_train,
     y_cluster_propagated
 )
+```
 
-cluster_propagation_accuracy = cluster_propagation_classifier.score(
-    X_digits_test,
-    y_digits_test
+### Diagnosing Propagation in a Simulation
+
+In this simulation, the hidden training labels let us inspect the pseudo-labels after fitting. The following diagnostics would not be available for a genuinely unlabeled pool.
+
+We define pseudo-label accuracy over the observations that were not part of the controlled 50-label baseline:
+
+$$
+\text{pseudo-label accuracy}
+=
+\frac{\text{correct pseudo-labels in }U}
+{\text{pseudo-labeled observations in }U}.
+$$
+
+```{python}
+#| label: cluster-propagation-diagnostics
+
+is_control_labeled = np.zeros(len(X_digits_train), dtype=bool)
+is_control_labeled[labeled_indices] = True
+is_control_unlabeled = ~is_control_labeled
+
+cluster_pseudo_label_accuracy = accuracy_score(
+    y_digits_train[is_control_unlabeled],
+    y_cluster_propagated[is_control_unlabeled]
 )
 
 pd.Series({
-    "Pseudo-label accuracy on the training pool": cluster_pseudo_label_accuracy,
-    "Classifier accuracy on the test set": cluster_propagation_accuracy
+    "Pseudo-labeled observations": is_control_unlabeled.sum(),
+    "Pseudo-label accuracy": cluster_pseudo_label_accuracy
 }).round(3)
 ```
 
-The pseudo-label accuracy above is available only because the true training labels were hidden rather than absent. In a real problem it cannot be computed for the unlabeled pool.
+This diagnostic uses the same unlabeled evaluation mask for the propagation procedures below. That keeps the meaning of pseudo-label accuracy consistent.
 
-### Cluster Purity and Failure Modes
+### Cluster Purity
 
-Cluster propagation works best when clusters are class-pure. For diagnostic purposes, the hidden labels allow us to calculate the proportion of each cluster belonging to its majority class.
+Cluster propagation works best when clusters contain observations from one target class. In a simulation, **cluster purity** measures the fraction belonging to the most frequent true class:
+
+$$
+\operatorname{purity}(C_k)
+=
+\frac{
+\max_c\left|\{i\in C_k:y_i=c\}\right|
+}{|C_k|}.
+$$
+
+Purity is a diagnostic, not a training input. It requires the labels that are supposed to be hidden and therefore cannot be computed for a genuinely unlabeled pool.
 
 ```{python}
 #| label: digits-cluster-purity
@@ -553,13 +641,13 @@ cluster_diagnostics = pd.DataFrame(cluster_diagnostics)
 cluster_diagnostics.sort_values("Purity").head(10).round(3)
 ```
 
-Low-purity clusters violate the cluster assumption. Even a representative nearest to the centroid may not carry the majority class, particularly when digit shapes overlap in pixel space.
+Low-purity clusters reveal a failure of the cluster assumption. Purity also tends to increase when many small clusters are created, so it must not be used alone to choose $K$.
 
-## Filtered Cluster Propagation
+## Conservative Propagation by Distance
 
-Hard propagation labels every observation in a cluster, including points near its boundary. A conservative alternative keeps only observations sufficiently close to their assigned centroid. This creates a tradeoff between **coverage** and pseudo-label reliability.
+Full propagation labels every observation in a cluster, including observations near cluster boundaries or far from the centroid. A more conservative policy retains only the observations closest to their assigned centroid.
 
-For each observation, select its distance to the assigned centroid:
+For observation $i$, the relevant distance is
 
 $$
 d_i
@@ -569,7 +657,15 @@ d_i
 \right\|_2.
 $$
 
-Within each cluster, observations above a chosen distance percentile are excluded from pseudo-labeled training.
+Within each cluster, a percentile determines which distances are retained. Retaining the 80th percentile, for example, keeps approximately the closest 80% of each cluster. Ties and cluster sizes can make the overall fraction differ slightly from 80%.
+
+**Coverage** is the fraction of the initially unlabeled pool that receives and retains a pseudo-label:
+
+$$
+\text{coverage}
+=
+\frac{\text{retained pseudo-labels in }U}{|U|}.
+$$
 
 ```{python}
 #| label: filtered-propagation-diagnostics
@@ -593,6 +689,8 @@ def closest_cluster_mask(percentile):
             assigned_cluster_distances[in_cluster] <= cutoff
         )
 
+    # Verified representative labels should never be discarded.
+    keep[representative_indices] = True
     return keep
 
 
@@ -601,13 +699,16 @@ propagation_diagnostics = []
 
 for percentile in propagation_percentiles:
     retained = closest_cluster_mask(percentile)
+    retained_unlabeled = retained & is_control_unlabeled
 
     propagation_diagnostics.append({
         "Percentile retained within each cluster": percentile,
-        "Coverage": retained.mean(),
+        "Coverage": (
+            retained_unlabeled.sum() / is_control_unlabeled.sum()
+        ),
         "Pseudo-label accuracy": accuracy_score(
-            y_digits_train[retained],
-            y_cluster_propagated[retained]
+            y_digits_train[retained_unlabeled],
+            y_cluster_propagated[retained_unlabeled]
         )
     })
 
@@ -617,7 +718,7 @@ propagation_diagnostics.round(3)
 
 ```{python}
 #| label: fig-propagation-coverage-purity
-#| fig-cap: "Filtering by distance trades pseudo-label coverage for greater reliability in this simulation."
+#| fig-cap: "Filtering by centroid distance trades pseudo-label coverage for reliability in this simulation."
 #| fig-width: 8
 #| fig-height: 4.5
 #| code-fold: true
@@ -640,17 +741,19 @@ for _, row in propagation_diagnostics.iterrows():
         textcoords="offset points"
     )
 
-ax.set_xlabel("Fraction of the training pool retained")
-ax.set_ylabel("Pseudo-label accuracy")
+ax.set_xlabel("Pseudo-label coverage on the unlabeled pool")
+ax.set_ylabel("Pseudo-label accuracy on retained observations")
 ax.set_ylim(0.75, 1.01)
 
 plt.show()
 ```
 
-The $80$th percentile is fixed here as an illustrative policy before evaluating the final classifier. It must not be selected by repeatedly checking test performance.
+The graph uses hidden labels only to explain the behavior of the simulation. In a real application, it cannot be used to select the percentile because pseudo-label accuracy is unknown. A percentile must be selected with a separate validation protocol using verified labels.
+
+For the final demonstration, the 80th percentile is fixed as an illustrative policy before any test result is computed.
 
 ```{python}
-#| label: train-filtered-propagation-classifier
+#| label: fit-filtered-propagation-classifier
 
 chosen_propagation_percentile = 80
 partially_propagated = closest_cluster_mask(
@@ -662,403 +765,63 @@ filtered_propagation_classifier.fit(
     X_digits_train[partially_propagated],
     y_cluster_propagated[partially_propagated]
 )
-
-filtered_propagation_accuracy = filtered_propagation_classifier.score(
-    X_digits_test,
-    y_digits_test
-)
-
-pd.Series({
-    "Retained observations": partially_propagated.sum(),
-    "Retained fraction": partially_propagated.mean(),
-    "Test accuracy": filtered_propagation_accuracy
-}).round(3)
 ```
 
-Distance filtering can remove ambiguous observations, but distance to a centroid is not a calibrated measure of label correctness. Its effect may be neutral or harmful, and it should be validated under the intended labeling protocol.
+Distance to a centroid is not a calibrated probability that a label is correct. Filtering can help, have little effect, or remove useful observations.
 
-## Graph-Based Semi-Supervised Learning
+## Final Evaluation
 
-Cluster propagation imposes one label on an entire hard partition. Graph-based methods use a finer representation: every observation is a node, and edges connect similar observations. Labels then diffuse through high-similarity paths [@zhu2002labelpropagation].
-
-An RBF graph uses affinities of the form
-
-$$
-w_{ij}
-=
-\exp\left(
--\gamma
-\left\|
-\mathbf{x}_i-\mathbf{x}_j
-\right\|_2^2
-\right),
-$$
-
-where larger $\gamma$ produces more local connections. A k-nearest-neighbor graph connects every observation only to nearby nodes. In both cases, feature representation and scaling determine which observations are considered similar.
-
-Scikit-Learn provides two related estimators:
-
-- `LabelPropagation` uses hard clamping: supplied training labels remain fixed during diffusion.
-- `LabelSpreading` uses a normalized graph and soft clamping controlled by $\alpha\in(0,1)$, allowing the initial labels to be adjusted [@zhou2004localglobal].
-
-Both estimators represent unlabeled targets with the integer `-1`. Their `transduction_` attribute contains inferred labels for the fitted observations, while `label_distributions_` stores estimated class distributions.
-
-### Visualizing Label Diffusion
-
-The moons dataset shows why a graph can be more appropriate than centroid-shaped clusters. The classes form nonconvex manifolds, but nearby points along each moon are strongly connected.
+All procedures and the illustrative percentile have now been fixed. We evaluate the test set once and collect the results in a single table.
 
 ```{python}
-#| label: fit-graph-methods-moons
+#| label: evaluate-semi-supervised-procedures
 
-y_setting_semi = np.full(len(y_setting), -1, dtype=int)
-y_setting_semi[labeled_setting_indices] = y_setting[labeled_setting_indices]
+evaluation_models = {
+    "Controlled 50-label baseline": low_label_classifier,
+    "K-Means representatives": representative_classifier,
+    "Full cluster propagation": cluster_propagation_classifier,
+    "Filtered cluster propagation": filtered_propagation_classifier,
+    "Fully supervised reference": fully_supervised_classifier
+}
 
-moon_label_propagation = LabelPropagation(
-    kernel="knn",
-    n_neighbors=10,
-    max_iter=1_000,
-    tol=1e-3,
-    n_jobs=-1
-)
+test_accuracies = {
+    name: model.score(X_digits_test, y_digits_test)
+    for name, model in evaluation_models.items()
+}
 
-moon_label_spreading = LabelSpreading(
-    kernel="knn",
-    n_neighbors=10,
-    alpha=0.2,
-    max_iter=100,
-    tol=1e-3,
-    n_jobs=-1
-)
-
-_ = moon_label_propagation.fit(X_setting, y_setting_semi)
-_ = moon_label_spreading.fit(X_setting, y_setting_semi)
-```
-
-```{python}
-#| label: fig-graph-label-diffusion
-#| fig-cap: "Graph methods propagate a few labels along the nonconvex geometry revealed by the unlabeled observations."
-#| fig-width: 12
-#| fig-height: 4
-#| code-fold: true
-#| code-summary: "Show code"
-
-x_min, x_max = X_setting[:, 0].min() - 0.3, X_setting[:, 0].max() + 0.3
-y_min, y_max = X_setting[:, 1].min() - 0.3, X_setting[:, 1].max() + 0.3
-xx, yy = np.meshgrid(
-    np.linspace(x_min, x_max, 300),
-    np.linspace(y_min, y_max, 300)
-)
-moon_grid = np.c_[xx.ravel(), yy.ravel()]
-
-graph_models = [
-    ("Label Propagation", moon_label_propagation),
-    ("Label Spreading", moon_label_spreading)
-]
-
-fig, axes = plt.subplots(1, 3, figsize=(12, 4), sharex=True, sharey=True)
-
-axes[0].scatter(
-    X_setting[~is_labeled_setting, 0],
-    X_setting[~is_labeled_setting, 1],
-    color="#D5D8DC",
-    s=15
-)
-axes[0].scatter(
-    X_setting[is_labeled_setting, 0],
-    X_setting[is_labeled_setting, 1],
-    c=y_setting[is_labeled_setting],
-    cmap="coolwarm",
-    edgecolor="black",
-    s=75
-)
-axes[0].set_title("Available labels")
-
-for ax, (title, model) in zip(axes[1:], graph_models):
-    grid_prediction = model.predict(moon_grid).reshape(xx.shape)
-    ax.contourf(xx, yy, grid_prediction, cmap="coolwarm", alpha=0.25)
-    ax.scatter(
-        X_setting[:, 0],
-        X_setting[:, 1],
-        c=model.transduction_,
-        cmap="coolwarm",
-        s=15,
-        alpha=0.8
-    )
-    ax.scatter(
-        X_setting[is_labeled_setting, 0],
-        X_setting[is_labeled_setting, 1],
-        c=y_setting[is_labeled_setting],
-        cmap="coolwarm",
-        edgecolor="black",
-        s=75
-    )
-    ax.set_title(title)
-
-for ax in axes:
-    ax.set_xlabel("Feature 1")
-    ax.set_ylabel("Feature 2")
-
-plt.show()
-```
-
-### Graph Methods on Digits
-
-We now fit both methods using the same $50$ labeled observations used by the supervised baseline. The k-nearest-neighbor kernel avoids constructing a fully dense RBF graph and is more economical for this dataset.
-
-```{python}
-#| label: fit-graph-methods-digits
-
-digits_label_propagation = LabelPropagation(
-    kernel="knn",
-    n_neighbors=10,
-    max_iter=1_000,
-    tol=1e-3,
-    n_jobs=-1
-)
-
-digits_label_spreading = LabelSpreading(
-    kernel="knn",
-    n_neighbors=10,
-    alpha=0.2,
-    max_iter=100,
-    tol=1e-3,
-    n_jobs=-1
-)
-
-digits_label_propagation.fit(X_digits_train, y_digits_semi)
-digits_label_spreading.fit(X_digits_train, y_digits_semi)
-
-label_propagation_accuracy = digits_label_propagation.score(
-    X_digits_test,
-    y_digits_test
-)
-label_spreading_accuracy = digits_label_spreading.score(
-    X_digits_test,
-    y_digits_test
-)
-
-pd.DataFrame({
-    "Iterations": [
-        digits_label_propagation.n_iter_,
-        digits_label_spreading.n_iter_
+semi_supervised_results = pd.DataFrame({
+    "Verified labels": [
+        n_labeled,
+        n_labeled,
+        n_labeled,
+        n_labeled,
+        len(X_digits_train)
     ],
-    "Test accuracy": [
-        label_propagation_accuracy,
-        label_spreading_accuracy
-    ]
-}, index=["LabelPropagation", "LabelSpreading"]).round(3)
-```
+    "Uses pseudo-labels": [False, False, True, True, False],
+    "Test accuracy": list(test_accuracies.values())
+}, index=evaluation_models.keys())
 
-The hidden training labels can again be used for simulation diagnostics. They reveal the quality of graph transduction without participating in fitting.
-
-```{python}
-#| label: graph-transduction-diagnostics
-
-pd.Series({
-    "LabelPropagation transduction accuracy": accuracy_score(
-        y_digits_train,
-        digits_label_propagation.transduction_
-    ),
-    "LabelSpreading transduction accuracy": accuracy_score(
-        y_digits_train,
-        digits_label_spreading.transduction_
-    )
-}).round(3)
-```
-
-::: {.callout-warning}
-Graph methods may fail when the graph contains bridges between classes, disconnected components without labeled seeds, or irrelevant features that distort neighborhoods. RBF graphs also require $O(n^2)$ pairwise affinities, which limits their use on large datasets.
-:::
-
-## Self-Training
-
-Self-training is a wrapper strategy that can use any probabilistic base classifier. It begins with the labeled subset, predicts probabilities for the unlabeled pool, adds sufficiently confident predictions as pseudo-labels, and repeats [@yarowsky1995unsupervised].
-
-At iteration $t$, a threshold policy selects
-
-$$
-\mathcal{S}^{(t)}
-=
-\left\{
-i:
-\max_c
-\widehat{P}^{(t)}(y=c\mid\mathbf{x}_i)
-\geq \tau
-\right\},
-$$
-
-where $\tau$ is the confidence threshold. The selected observations are assigned their predicted class and included in the next fit.
-
-```{python}
-#| label: fit-self-training-digits
-
-self_training_classifier = SelfTrainingClassifier(
-    estimator=make_digits_classifier(),
-    criterion="threshold",
-    threshold=0.75,
-    max_iter=20,
-    verbose=False
-)
-
-self_training_classifier.fit(X_digits_train, y_digits_semi)
-
-self_training_accuracy = self_training_classifier.score(
-    X_digits_test,
-    y_digits_test
-)
-
-pd.Series({
-    "Iterations": self_training_classifier.n_iter_,
-    "Pseudo-labeled observations": np.sum(
-        self_training_classifier.labeled_iter_ > 0
-    ),
-    "Remaining unlabeled observations": np.sum(
-        self_training_classifier.labeled_iter_ == -1
-    ),
-    "Test accuracy": self_training_accuracy
-})
-```
-
-The `labeled_iter_` attribute records when every observation entered the labeled set. Original labels are marked with iteration $0$, newly assigned labels have positive iteration numbers, and observations still unlabeled are marked with $-1$.
-
-```{python}
-#| label: fig-self-training-iterations
-#| fig-cap: "Number of high-confidence pseudo-labels added during each self-training iteration."
-#| fig-width: 8
-#| fig-height: 4.5
-#| code-fold: true
-#| code-summary: "Show code"
-
-pseudo_label_iterations = self_training_classifier.labeled_iter_[
-    self_training_classifier.labeled_iter_ > 0
-]
-
-iteration_ids, iteration_counts = np.unique(
-    pseudo_label_iterations,
-    return_counts=True
-)
-
-fig, ax = plt.subplots(figsize=(8, 4.5))
-ax.bar(iteration_ids, iteration_counts, color="#2471A3")
-ax.set_xlabel("Self-training iteration")
-ax.set_ylabel("New pseudo-labels")
-ax.set_xticks(iteration_ids)
-
-plt.show()
-```
-
-Because the true labels are hidden only for simulation, we can measure how often the added pseudo-labels were correct.
-
-```{python}
-#| label: self-training-pseudo-label-diagnostics
-
-was_pseudo_labeled = self_training_classifier.labeled_iter_ > 0
-
-self_training_pseudo_label_accuracy = accuracy_score(
-    y_digits_train[was_pseudo_labeled],
-    self_training_classifier.transduction_[was_pseudo_labeled]
-)
-
-pd.Series({
-    "Pseudo-label accuracy": self_training_pseudo_label_accuracy,
-    "Pseudo-label coverage": was_pseudo_labeled.mean(),
-    "Termination condition": self_training_classifier.termination_condition_
-})
-```
-
-The threshold $0.75$ is an illustrative fixed policy, not a value selected on the test set. In this deterministic experiment, self-training accepts many pseudo-labels but performs worse than the original low-label baseline. This is a concrete example of negative transfer: greater pseudo-label coverage does not compensate for the errors reinforced during iteration.
-
-::: {.callout-important}
-Self-training confidence is not the same as correctness. An overconfident base classifier can reinforce its early mistakes, creating **confirmation bias**. Probability calibration, class imbalance, and threshold selection therefore matter. The alternative `criterion="k_best"` always adds observations, even when all current predictions are unreliable.
-:::
-
-## Comparing the Methods
-
-The methods can now be compared under the same held-out test set. All semi-supervised methods consume $50$ oracle labels, but they differ in how those labels are acquired and how unlabeled observations are used.
-
-```{python}
-#| label: semi-supervised-results-table
-
-semi_supervised_results = pd.DataFrame([
-    {
-        "Method": "Controlled random labels",
-        "Label acquisition": "Controlled random",
-        "Use of unlabeled data": "None",
-        "Oracle labels": n_labeled,
-        "Test accuracy": low_label_accuracy
-    },
-    {
-        "Method": "K-Means representatives",
-        "Label acquisition": "Cluster representatives",
-        "Use of unlabeled data": "Acquisition only",
-        "Oracle labels": n_labeled,
-        "Test accuracy": representative_accuracy
-    },
-    {
-        "Method": "Full cluster propagation",
-        "Label acquisition": "Cluster representatives",
-        "Use of unlabeled data": "Hard pseudo-labels",
-        "Oracle labels": n_labeled,
-        "Test accuracy": cluster_propagation_accuracy
-    },
-    {
-        "Method": "Filtered cluster propagation",
-        "Label acquisition": "Cluster representatives",
-        "Use of unlabeled data": "Filtered pseudo-labels",
-        "Oracle labels": n_labeled,
-        "Test accuracy": filtered_propagation_accuracy
-    },
-    {
-        "Method": "LabelPropagation",
-        "Label acquisition": "Controlled random",
-        "Use of unlabeled data": "Graph diffusion",
-        "Oracle labels": n_labeled,
-        "Test accuracy": label_propagation_accuracy
-    },
-    {
-        "Method": "LabelSpreading",
-        "Label acquisition": "Controlled random",
-        "Use of unlabeled data": "Soft graph diffusion",
-        "Oracle labels": n_labeled,
-        "Test accuracy": label_spreading_accuracy
-    },
-    {
-        "Method": "Self-training",
-        "Label acquisition": "Controlled random",
-        "Use of unlabeled data": "Confidence pseudo-labels",
-        "Oracle labels": n_labeled,
-        "Test accuracy": self_training_accuracy
-    },
-    {
-        "Method": "Fully supervised reference",
-        "Label acquisition": "All training labels",
-        "Use of unlabeled data": "Not applicable",
-        "Oracle labels": len(X_digits_train),
-        "Test accuracy": fully_supervised_accuracy
-    }
-])
-
-semi_supervised_results.set_index("Method").round(3)
+semi_supervised_results.round(3)
 ```
 
 ```{python}
 #| label: fig-semi-supervised-comparison
-#| fig-cap: "Held-out test accuracy for supervised references and semi-supervised strategies in the Digits experiment."
+#| fig-cap: "Held-out test accuracy for the pre-specified procedures in the Digits simulation."
 #| fig-width: 9
-#| fig-height: 6
+#| fig-height: 5
 #| code-fold: true
 #| code-summary: "Show code"
 
 plot_results = semi_supervised_results.sort_values("Test accuracy")
 bar_colors = np.where(
-    plot_results["Oracle labels"] > n_labeled,
+    plot_results["Verified labels"] > n_labeled,
     "#7F8C8D",
     "#2874A6"
 )
 
-fig, ax = plt.subplots(figsize=(9, 6))
+fig, ax = plt.subplots(figsize=(9, 5))
 bars = ax.barh(
-    plot_results["Method"],
+    plot_results.index,
     plot_results["Test accuracy"],
     color=bar_colors
 )
@@ -1070,158 +833,89 @@ ax.set_xlim(0.70, 1.00)
 plt.show()
 ```
 
-The fully supervised model is an upper reference rather than a fair competitor. Likewise, representative labeling and controlled random labeling use different acquisition policies. A method comparison should not attribute the entire difference between those rows to semi-supervised propagation.
+The first two rows compare different ways of acquiring the same number of verified labels. Their difference must not be attributed to pseudo-labeling because neither method uses pseudo-labels. The next two rows add cluster propagation after representative acquisition. The fully supervised model is contextual evidence obtained with a much larger labeling budget, not a fair semi-supervised competitor.
 
-### Variability from the Labeled Subset
+One test evaluation cannot establish that a procedure is universally better. Results can change when the 50 labeled observations, the K-Means initialization, or the data split changes. A formal comparison should repeat every procedure over matched label draws and report the distribution of their differences.
 
-With a small labeling budget, results can depend strongly on which observations receive labels. The following experiment repeats only the supervised low-label baseline to illustrate this variability. The same repeated label draws should be reused across all methods in a formal benchmark.
+## Evaluation Guidelines
 
-```{python}
-#| label: repeated-low-label-baselines
+A responsible cluster-based semi-supervised experiment should follow these steps:
 
-label_draw_accuracies = []
-
-for seed in range(10):
-    repeated_splitter = StratifiedShuffleSplit(
-        n_splits=1,
-        train_size=n_labeled,
-        random_state=seed
-    )
-    repeated_indices, _ = next(
-        repeated_splitter.split(X_digits_train, y_digits_train)
-    )
-
-    repeated_classifier = make_digits_classifier()
-    repeated_classifier.fit(
-        X_digits_train[repeated_indices],
-        y_digits_train[repeated_indices]
-    )
-
-    label_draw_accuracies.append(
-        repeated_classifier.score(X_digits_test, y_digits_test)
-    )
-```
-
-```{python}
-#| label: fig-label-budget-variability
-#| fig-cap: "Test accuracy varies across controlled draws of the same 50-label budget."
-#| fig-width: 8
-#| fig-height: 4.5
-#| code-fold: true
-#| code-summary: "Show code"
-
-fig, ax = plt.subplots(figsize=(8, 4.5))
-ax.scatter(
-    range(10),
-    label_draw_accuracies,
-    s=65,
-    color="#2874A6"
-)
-ax.axhline(
-    np.mean(label_draw_accuracies),
-    color="#C0392B",
-    linestyle="--",
-    label=f"Mean = {np.mean(label_draw_accuracies):.3f}"
-)
-ax.set_xlabel("Label-draw seed")
-ax.set_ylabel("Test accuracy")
-ax.set_xticks(range(10))
-ax.legend()
-
-plt.show()
-```
-
-This repeated test evaluation is descriptive. It must not be used to choose the most favorable seed or model. A rigorous study should predefine the repeated protocol and report means, variability, and uncertainty for every method.
-
-## Choosing a Strategy
-
-| Strategy | Structural assumption | Main strength | Main risk |
-|:---|:---|:---|:---|
-| Representative labeling | Centroids summarize useful regions | Efficient use of an annotation budget | Representatives may be atypical or omit classes |
-| Cluster propagation | Clusters are class-pure | Simple and scalable after clustering | One label can contaminate a whole cluster |
-| Label propagation | Nearby graph nodes share labels | Captures nonconvex geometry | Sensitive to graph construction and scale |
-| Label spreading | Labels vary smoothly on a normalized graph | More robust to imperfect initial labels | Requires tuning $\alpha$ and graph parameters |
-| Self-training | High-confidence predictions are usually correct | Works with many probabilistic classifiers | Confirmation bias and class imbalance |
-
-The best method depends on the data geometry, labeling process, deployment setting, and computational budget. There is no universally superior semi-supervised algorithm.
-
-## Practical Modeling Workflow
-
-A reliable semi-supervised project should proceed as follows:
-
-1. Define the labeling budget and the population to which predictions will apply.
-2. Separate a labeled test set before examining unlabeled structure.
-3. Establish a supervised low-label baseline and a fully supervised reference when simulation labels are available.
-4. Fit preprocessing only with permitted training information and include learned transformations in the evaluation protocol.
-5. State the structural assumption used by the semi-supervised method.
-6. Select graph, clustering, and confidence hyperparameters without consulting the final test set.
-7. Measure both predictive performance and pseudo-label coverage when possible.
-8. Repeat the experiment across several label draws and model seeds.
-9. Inspect performance by class to detect majority-class amplification.
-10. Monitor distribution shift before applying pseudo-labels in production.
+1. Define the target population and the budget of verified labels.
+2. Separate the final test set before discovering clusters.
+3. Establish a supervised baseline using only the available labels.
+4. Fit K-Means and all learned preprocessing using training predictors only.
+5. Keep acquisition effects separate from propagation effects.
+6. Select $K$, distance percentiles, and other settings without consulting the final test set.
+7. Define pseudo-label accuracy and coverage on the initially unlabeled pool.
+8. Use hidden labels only for retrospective simulation diagnostics, never as deployable inputs.
+9. Repeat all compared procedures over the same label draws and random seeds.
+10. Retain the supervised baseline when unlabeled data do not provide a validated improvement.
 
 ### Common Mistakes
 
 ::: {.callout-warning}
-## Building structure with the test set
+#### Treating cluster identifiers as class labels
 
-Clustering or constructing a graph with unlabeled test predictors leaks information in an inductive evaluation. The test set must remain isolated until final scoring.
+Cluster numbers are arbitrary. A target class can occupy several clusters, and one cluster can contain several classes.
 :::
 
 ::: {.callout-warning}
-## Treating cluster identifiers as class labels
+#### Building clusters with the test set
 
-Cluster numbers are arbitrary. A single class can occupy several clusters, and one cluster can contain several classes.
+Using test predictors to fit K-Means leaks information into an evaluation intended to measure performance on unseen observations.
 :::
 
 ::: {.callout-warning}
-## Hiding pseudo-label errors
+#### Treating pseudo-labels as verified truth
 
-Pseudo-labels are uncertain predictions. Training on them as though they were verified labels can amplify errors and produce misleading confidence.
+Pseudo-labels are uncertain assignments. Training on them can amplify the error of one incorrectly labeled representative.
 :::
 
 ::: {.callout-warning}
-## Tuning with unavailable labels
+#### Tuning with hidden labels
 
-Hidden labels may be used to explain a simulation, but a deployable procedure cannot use them to choose filtering percentiles, graph parameters, or confidence thresholds.
+Hidden labels can explain a controlled simulation, but a real procedure cannot use them to choose $K$, filtering percentiles, or representatives.
 :::
 
 ::: {.callout-warning}
-## Assuming unlabeled data must help
+#### Assuming unlabeled observations must help
 
-Semi-supervised learning depends on structural assumptions. Always retain the low-label supervised baseline and accept the supervised solution when unlabeled data do not provide a validated improvement.
+The procedure depends on the cluster assumption. When clusters do not align with classes, using pseudo-labels may perform worse than the supervised baseline.
 :::
 
-## Computational Considerations
+## Limitations
 
-K-Means scales approximately linearly with the number of observations, clusters, features, iterations, and initializations. It can therefore support relatively large pools, although a large number of clusters increases cost.
+K-Means measures similarity with Euclidean distance and represents each cluster by a centroid. This works best for compact, similarly scaled groups. It may be inappropriate for curved structures, strongly unequal cluster sizes, many outliers, or predictor spaces in which Euclidean distance has little semantic meaning.
 
-Dense RBF graph methods require pairwise similarities and can use $O(n^2)$ memory. A k-nearest-neighbor graph is sparser but may contain disconnected components. Self-training repeatedly fits its base estimator, so its cost depends on both the number of iterations and the estimator's training complexity.
+The Digits experiment also assumes a perfect oracle and uses hidden labels to create a balanced educational baseline. Real annotation can be noisy, expensive, delayed, and unable to guarantee that every class appears in a small budget.
 
-For large datasets, practical alternatives include mini-batch clustering, approximate nearest-neighbor graphs, smaller representative pools, and incremental base estimators.
+Finally, selecting one representative per cluster is a single-round acquisition heuristic. More advanced semi-supervised and active-learning methods exist, but they require additional concepts and are outside the scope of this chapter.
 
 ## Chapter Summary
 
-- Semi-supervised learning combines a small labeled set with a larger unlabeled pool to improve a supervised task.
-- Unlabeled data help only when smoothness, cluster, or manifold assumptions relate predictor geometry to the target.
-- Representative labeling uses unsupervised structure to allocate an annotation budget and is distinct from pseudo-label propagation.
-- K-Means cluster propagation is simple but can spread one representative error across an entire cluster.
-- Distance filtering trades pseudo-label coverage for potential reliability without guaranteeing improvement.
-- `LabelPropagation` and `LabelSpreading` diffuse labels through a similarity graph and can model nonconvex geometry.
-- `SelfTrainingClassifier` iteratively adds confident predictions but can amplify early mistakes.
-- Transductive labels for the training pool are not equivalent to predictions on unseen test observations.
-- Fair evaluation requires an isolated test set, equal label budgets, repeated label draws, and no tuning with hidden labels.
-- A supervised low-label baseline remains essential because semi-supervised learning can produce negative transfer.
+- Semi-supervised learning combines a small verified labeled set with a larger unlabeled pool for a predictive task.
+- K-Means alternates between nearest-centroid assignment and centroid updates.
+- K-Means++ spreads initial centroids using squared-distance sampling; `n_init` repeats the complete fit and retains the solution with the lowest inertia.
+- Inertia is the sum of squared distances to assigned centroids; it measures compactness, not agreement with target classes.
+- Elbow and silhouette analyses describe geometric clustering and do not guarantee class alignment.
+- Representative acquisition selects real observations near centroids for an oracle to label.
+- Cluster propagation assigns each representative label to other observations in its cluster, creating pseudo-labels.
+- The cluster assumption can fail, allowing one representative error to contaminate many observations.
+- Distance filtering trades pseudo-label coverage for possible reliability but does not provide calibrated confidence.
+- Acquisition and propagation effects must be reported separately.
+- The test set must remain isolated until all procedures and settings have been fixed.
+- A supervised low-label baseline remains essential because unlabeled data do not guarantee improvement.
 
 ## Exercises
 
-1. Repeat the Digits experiment with label budgets of 20, 50, 100, and 200. Plot mean accuracy and standard deviation across at least five controlled label draws.
-2. Compare random acquisition with K-Means representative acquisition for several values of $K$. Separate acquisition gains from propagation gains.
-3. Plot cluster purity against cluster size. Identify examples from the least pure clusters and explain why they are difficult.
-4. Compare full cluster propagation with the 20th, 40th, 60th, and 80th distance percentiles using a validation protocol that does not tune on the test set.
-5. Compare RBF and k-nearest-neighbor kernels for `LabelSpreading`. Investigate sensitivity to `gamma`, `n_neighbors`, and feature scaling.
-6. Construct a moons dataset with increasing noise. Determine when graph propagation begins to perform worse than the supervised baseline.
-7. Fit `SelfTrainingClassifier` with several confidence thresholds. Plot pseudo-label coverage, pseudo-label accuracy in simulation, and test accuracy.
-8. Replace threshold selection with `criterion="k_best"`. Explain why adding a fixed number of observations can be dangerous early in training.
-9. Introduce label noise into the initial labeled subset and compare `LabelPropagation` with `LabelSpreading` for several values of `alpha`.
-10. Design a semi-supervised evaluation for a real application in which the true labels of the unlabeled pool are never available.
+1. Fit K-Means to the synthetic blobs with `init="random"` and `init="k-means++"` using matched values of `random_state` and `n_init=1`. Then increase `n_init` for both methods and explain how repeated starts change their inertia distributions and cluster assignments.
+2. Repeat the elbow and silhouette analyses after increasing one blob's standard deviation. Explain why the preferred $K$ may become less clear.
+3. Repeat the Digits experiment with labeling budgets of 20, 50, 100, and 200. Keep acquisition and propagation results separate.
+4. Compare a simple random acquisition policy with K-Means representative acquisition over at least five matched random seeds.
+5. Plot cluster purity against cluster size. Inspect images from the least pure clusters and describe the visual ambiguities.
+6. Compare full propagation with several distance percentiles. Design a validation procedure that does not use the final test labels to choose the percentile.
+7. Report pseudo-label coverage and accuracy separately for every digit class in this simulation.
+8. Add noise to a fraction of the representative labels and measure how many pseudo-labels each incorrect representative affects.
+9. Standardize the pixel features instead of dividing by 16. Explain how changing feature scale affects distances, clusters, and representatives.
+10. Design an evaluation for a real application in which the labels of the unlabeled pool are never available, including the oracle, labeling budget, validation set, and final test set.
